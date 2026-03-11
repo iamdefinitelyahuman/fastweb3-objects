@@ -1,0 +1,11 @@
+site_name: fastweb3-objects
+site_description: High-level objects for fastweb3.
+site_url: https://iamdefinitelyahuman.github.io/fastweb3-objects/
+repo_url: https://github.com/iamdefinitelyahuman/fastweb3-objects/
+repo_name: iamdefinitelyahuman/fastweb3-objects
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
