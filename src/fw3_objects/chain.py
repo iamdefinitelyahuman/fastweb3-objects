@@ -13,6 +13,8 @@ from .errors import ChainMismatch
 
 
 class _DefaultChainContext(AbstractContextManager["Chain"]):
+    """Context manager for temporarily setting the thread-local default chain."""
+
     def __init__(self, chain: "Chain", *, strict: bool = False) -> None:
         self._chain = chain
         self._strict = strict
@@ -33,12 +35,22 @@ class _DefaultChainContext(AbstractContextManager["Chain"]):
 
 
 class Chain:
+    """Canonical chain context for block and transaction access."""
+
     _instances: dict[int, "Chain"] = {}
     _instances_lock = threading.RLock()
 
     _thread_local = threading.local()
 
     def __new__(cls, chain_id: int) -> "Chain":
+        """Return the canonical instance for ``chain_id``.
+
+        Args:
+            chain_id: Chain ID to instantiate.
+
+        Returns:
+            The canonical ``Chain`` instance for the given chain ID.
+        """
         chain_id = int(chain_id)
 
         with cls._instances_lock:
@@ -48,6 +60,11 @@ class Chain:
             return cls._instances[chain_id]
 
     def __init__(self, chain_id: int) -> None:
+        """Initialize the chain and create its default Web3 client.
+
+        Args:
+            chain_id: Chain ID to initialize.
+        """
         if getattr(self, "_initialized", False):
             return
 
@@ -59,15 +76,32 @@ class Chain:
         self._create_w3()
 
     def __repr__(self) -> str:
+        """Return a developer-friendly representation."""
         return f"Chain({self.id})"
 
     def __int__(self) -> int:
+        """Return the numeric chain ID."""
         return self.id
 
     def __len__(self) -> int:
+        """Return the number of addressable block indices."""
         return self.height() + 1
 
     def __getitem__(self, block_number: int):
+        """Return a block by number.
+
+        Negative indices are resolved relative to the latest block.
+
+        Args:
+            block_number: Absolute or negative-relative block number.
+
+        Returns:
+            The requested block object.
+
+        Raises:
+            TypeError: If ``block_number`` is not an integer.
+            IndexError: If a negative index resolves before genesis.
+        """
 
         if isinstance(block_number, slice):
             raise TypeError("Slicing is not supported")
@@ -84,31 +118,53 @@ class Chain:
 
     @property
     def id(self) -> int:
+        """Return the chain ID."""
         return self._chain_id
 
     @property
     def w3(self) -> Web3:
+        """Return the configured ``Web3`` instance."""
         assert self._w3 is not None
         return self._w3
 
     def height(self) -> int:
+        """Return the latest block number."""
         return self.w3.eth.block_number()
 
     def block_gas_limit(self) -> int:
+        """Return the gas limit of the latest block."""
         block = self[-1]
 
         return block["gasLimit"]
 
     def base_fee(self) -> int:
+        """Return the base fee per gas of the latest block."""
         return self.w3.eth.fee_history(1, "latest", [])["baseFeePerGas"][0]
 
     def priority_fee(self) -> int:
+        """Return the suggested max priority fee per gas."""
         return self.w3.eth.max_priority_fee_per_gas()
 
     def get_transaction(self, txid: str | bytes):
+        """Return a transaction by hash.
+
+        Args:
+            txid: Transaction hash as hex string or bytes.
+
+        Returns:
+            The requested transaction object.
+        """
         return self.w3.eth.get_transaction(txid)
 
     def get_block(self, block_identifier: int | str | bytes):
+        """Return a block by number, tag, or hash.
+
+        Args:
+            block_identifier: Block number, block tag, or block hash.
+
+        Returns:
+            The requested block object.
+        """
         if isinstance(block_identifier, bytes):
             return self.w3.eth.get_block_by_hash(
                 hash32(block_identifier, name="block", strict=True)
@@ -130,6 +186,19 @@ class Chain:
         height_buffer: int = 0,
         poll_interval: float = 5.0,
     ) -> Iterator:
+        """Yield new blocks as they become available.
+
+        Args:
+            height_buffer: Number of blocks behind the tip to follow.
+            poll_interval: Target polling interval in seconds.
+
+        Yields:
+            Blocks at the buffered height whenever that height changes.
+
+        Raises:
+            ValueError: If ``height_buffer`` is negative.
+            ValueError: If ``poll_interval`` is not positive.
+        """
         if height_buffer < 0:
             raise ValueError("height_buffer must be >= 0")
 
@@ -150,9 +219,18 @@ class Chain:
             time.sleep(max(0, poll_interval - elapsed))
 
     def as_default(self, *, strict: bool = False) -> AbstractContextManager["Chain"]:
+        """Return a context manager that sets this thread's default chain.
+
+        Args:
+            strict: Whether to raise if a different default chain is already set.
+
+        Returns:
+            A context manager that restores the previous default chain on exit.
+        """
         return _DefaultChainContext(self, strict=strict)
 
     def _create_w3(self, **w3_params: Any) -> None:
+        """Create and assign a new ``Web3`` instance for this chain."""
         self._w3_params = dict(w3_params)
         self._w3 = Web3(chain_id=self.id, **self._w3_params)
 
@@ -166,4 +244,10 @@ class Chain:
 
 
 def configure_chain(chain: Chain | int, **w3_params: Any) -> None:
+    """Configure the canonical ``Chain`` instance for a chain ID.
+
+    Args:
+        chain: Chain instance or chain ID to configure.
+        **w3_params: Keyword arguments forwarded to ``Web3``.
+    """
     Chain(chain)._create_w3(**w3_params)
