@@ -73,8 +73,6 @@ class Chain:
         self._w3_params: dict[str, Any] = {}
         self._w3: Web3 | None = None
 
-        self._create_w3()
-
     def __repr__(self) -> str:
         """Return a developer-friendly representation."""
         return f"Chain({self.id})"
@@ -124,7 +122,8 @@ class Chain:
     @property
     def w3(self) -> Web3:
         """Return the configured ``Web3`` instance."""
-        assert self._w3 is not None
+        if self._w3 is None:
+            self._create_w3(**self._w3_params)
         return self._w3
 
     def height(self) -> int:
