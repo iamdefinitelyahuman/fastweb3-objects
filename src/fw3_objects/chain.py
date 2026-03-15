@@ -154,7 +154,8 @@ class Chain:
         Returns:
             The requested transaction object.
         """
-        return self.w3.eth.get_transaction(txid)
+        # TODO this will eventually return a `Transaction` object from this library
+        return self.w3.eth.get_transaction_by_hash(txid)
 
     def get_block(self, block_identifier: int | str | bytes):
         """Return a block by number, tag, or hash.
