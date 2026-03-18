@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from getpass import getpass
-from typing import Any, Optional
+from typing import Any
 
 import fw3_keypass as kp
+from Crypto.Hash import keccak
+from fw3 import Web3
+from fw3_keypass.crypto.rlp import rlp_encode
+from fw3_keypass.db.core import resolve_db_path
+from fw3_keypass.utils import checksum_address
 
 from .chain import Chain
+from .errors import ChainMismatch, NoActiveChain
 
 
 class Accounts(kp.KeypassDB):
@@ -51,7 +57,7 @@ class Accounts(kp.KeypassDB):
             FileNotFoundError:
                 If the database does not exist and `create` is False.
         """
-        path = kp.db.core.resolve_db_path(name_or_path)
+        path = resolve_db_path(name_or_path)
         if create is None:
             create = name_or_path is None
         if path.exists():
@@ -67,7 +73,7 @@ class Accounts(kp.KeypassDB):
             self.initialize(password)
         elif unlock:
             self.unlock(password)
-        self._is_default = kp.db.core.resolve_db_path(None) == path
+        self._is_default = resolve_db_path(None) == path
 
     def _make_account(self, address: str) -> Account:
         return Account(address, db=self)
@@ -83,20 +89,17 @@ class Account(kp.Account):
         self,
         address: str,
         *,
+        db=None,
         chain: Chain | int | None = None,
     ) -> None:
-        self.address: str
-        self._bound_chain: Optional[Chain]
-
-    # --- binding ---
+        super().__init__(address, db=db)
+        self._bound_chain = None if chain is None else Chain(chain)
 
     def on(self, chain: Chain | int) -> Account:
         """
         Return a new Account instance bound to the given chain.
         """
-        ...
-
-    # --- core state ---
+        return Account(self.address, db=self._db, chain=chain)
 
     def balance(
         self,
@@ -107,7 +110,11 @@ class Account(kp.Account):
         """
         Return native token balance for this account.
         """
-        ...
+        w3 = self._resolve_w3(chain)
+        if block_identifier is None:
+            return w3.eth.get_balance(self.address)
+        else:
+            return w3.eth.get_balance(self.address, block_identifier)
 
     def nonce(
         self,
@@ -118,7 +125,11 @@ class Account(kp.Account):
         """
         Return the transaction nonce for this account.
         """
-        ...
+        w3 = self._resolve_w3(chain)
+        if block_identifier is None:
+            return w3.eth.get_transaction_count(self.address)
+        else:
+            return w3.eth.get_transaction_count(self.address, block_identifier)
 
     # --- execution ---
 
@@ -165,21 +176,6 @@ class Account(kp.Account):
         """
         ...
 
-    # --- signing ---
-
-    def sign(
-        self,
-        payload: bytes | dict[str, Any],
-        *,
-        chain: Chain | int | None = None,
-    ) -> Any:
-        """
-        Sign arbitrary data or a transaction payload.
-        """
-        ...
-
-    # --- deployment utilities ---
-
     def get_deployment_address(
         self,
         *,
@@ -189,15 +185,30 @@ class Account(kp.Account):
         """
         Compute the CREATE address for this account at the given nonce.
         """
-        ...
+        if nonce is None:
+            nonce = self.nonce(chain=chain)
 
-    # --- internal helpers ---
+        if not isinstance(nonce, int):
+            raise TypeError("nonce must be an int")
+        if nonce < 0:
+            raise ValueError("nonce cannot be negative")
 
-    def _resolve_chain(
+        encoded = rlp_encode([bytes.fromhex(self._normalized_address[2:]), nonce])
+        digest = keccak.new(digest_bits=256, data=encoded).digest()
+        return checksum_address("0x" + digest[-20:].hex())
+
+    def _resolve_w3(
         self,
         chain: Chain | int | None,
-    ) -> Chain:
-        """
-        Resolve and validate the effective chain for this operation.
-        """
-        ...
+    ) -> Web3:
+        if self._bound_chain is None:
+            if chain is None:
+                raise NoActiveChain("No chain specified for unbound Account")
+            resolved = Chain(chain)
+        else:
+            if chain is not None:
+                if self._bound_chain != Chain(chain):
+                    raise ChainMismatch(self._bound_chain, chain, "bound Account")
+            resolved = self._bound_chain
+
+        return resolved.w3
