@@ -24,7 +24,9 @@ class _DefaultChainContext(AbstractContextManager["Chain"]):
         self._previous = Chain._get_default_chain()
 
         if self._strict and self._previous is not None and self._previous is not self._chain:
-            raise ChainMismatch(f"default chain already set to {self._previous!r}")
+            raise ChainMismatch(
+                self._previous, self._chain, reason="default Chain context manager in strict mode"
+            )
 
         Chain._set_default_chain(self._chain)
         return self._chain
