@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from getpass import getpass
-from typing import Any
+from typing import Any, Mapping
 
 import fw3_keypass as kp
 from Crypto.Hash import keccak
 from fw3 import Web3
+from fw3.formatters import build_transaction_object
 from fw3_keypass.crypto.rlp import rlp_encode
 from fw3_keypass.db.core import resolve_db_path
 from fw3_keypass.utils import checksum_address
@@ -137,44 +138,116 @@ class Account(kp.Account):
         self,
         *,
         to: str | None = None,
-        data: bytes | None = None,
-        value: int | None = None,
+        data: bytes | str | None = None,
+        value: int | str | None = None,
+        gas: int | str | None = None,
+        gas_price: int | str | None = None,
+        max_fee_per_gas: int | str | None = None,
+        max_priority_fee_per_gas: int | str | None = None,
+        nonce: int | str | None = None,
+        chain_id: int | str | None = None,
+        type_: int | str | None = None,
+        access_list: list[Mapping[str, Any]] | None = None,
         chain: Chain | int | None = None,
         block_identifier: str | int | None = None,
-        **tx_params: Any,
     ) -> Any:
         """
-        Perform an eth_call as this account (no state change).
+        Perform an eth_call as this account without broadcasting a transaction.
         """
-        ...
+        w3 = self._resolve_w3(chain)
+        tx_kwargs = dict(
+            from_=self.address,
+            to=to,
+            gas=gas,
+            gas_price=gas_price,
+            max_fee_per_gas=max_fee_per_gas,
+            max_priority_fee_per_gas=max_priority_fee_per_gas,
+            value=value,
+            data=data,
+            nonce=nonce,
+            chain_id=chain_id,
+            type_=type_,
+            access_list=access_list,
+            block=block_identifier,
+        )
+        tx_kwargs = {k: v for k, v in tx_kwargs.items() if v is not None}
+        return w3.eth.call(**tx_kwargs)
 
     def estimate_gas(
         self,
         *,
         to: str | None = None,
-        data: bytes | None = None,
-        value: int | None = None,
+        data: bytes | str | None = None,
+        value: int | str | None = None,
+        gas: int | str | None = None,
+        gas_price: int | str | None = None,
+        max_fee_per_gas: int | str | None = None,
+        max_priority_fee_per_gas: int | str | None = None,
+        nonce: int | str | None = None,
+        chain_id: int | str | None = None,
+        type_: int | str | None = None,
+        access_list: list[Mapping[str, Any]] | None = None,
         chain: Chain | int | None = None,
-        **tx_params: Any,
+        block_identifier: str | int | None = None,
     ) -> int:
         """
         Estimate gas for a transaction originating from this account.
         """
-        ...
+        w3 = self._resolve_w3(chain)
+        tx_kwargs = dict(
+            from_=self.address,
+            to=to,
+            gas=gas,
+            gas_price=gas_price,
+            max_fee_per_gas=max_fee_per_gas,
+            max_priority_fee_per_gas=max_priority_fee_per_gas,
+            value=value,
+            data=data,
+            nonce=nonce,
+            chain_id=chain_id,
+            type_=type_,
+            access_list=access_list,
+            block=block_identifier,
+        )
+        tx_kwargs = {k: v for k, v in tx_kwargs.items() if v is not None}
+        return w3.eth.estimate_gas(**tx_kwargs)
 
     def transact(
         self,
         *,
         to: str | None = None,
-        data: bytes | None = None,
-        value: int | None = None,
+        data: bytes | str | None = None,
+        value: int | str | None = None,
+        gas: int | str | None = None,
+        gas_price: int | str | None = None,
+        max_fee_per_gas: int | str | None = None,
+        max_priority_fee_per_gas: int | str | None = None,
+        nonce: int | str | None = None,
+        chain_id: int | str | None = None,
+        type_: int | str | None = None,
+        access_list: list[Mapping[str, Any]] | None = None,
         chain: Chain | int | None = None,
-        **tx_params: Any,
     ) -> Any:
         """
-        Sign and send a transaction from this account.
+        Sign and broadcast a transaction from this account.
         """
-        ...
+        w3 = self._resolve_w3(chain)
+        tx = build_transaction_object(
+            from_=self.address,
+            to=to,
+            gas=gas,
+            gas_price=gas_price,
+            max_fee_per_gas=max_fee_per_gas,
+            max_priority_fee_per_gas=max_priority_fee_per_gas,
+            value=value,
+            data=data,
+            nonce=nonce,
+            chain_id=chain_id,
+            type_=type_,
+            access_list=access_list,
+        )
+        raw_tx = self.sign_transaction(tx)
+        return w3.eth.send_raw_transaction(raw_tx)
 
     def get_deployment_address(
         self,
