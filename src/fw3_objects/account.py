@@ -1,10 +1,81 @@
 from __future__ import annotations
 
+from getpass import getpass
 from typing import Any, Optional
 
 import fw3_keypass as kp
 
 from .chain import Chain
+
+
+class Accounts(kp.KeypassDB):
+    def __init__(self, name_or_path=None, *, create=None, unlock=True, password=None):
+        """
+        Initialize an Accounts database.
+
+        This constructor provides a streamlined interface for opening or creating
+        a keypass-backed account database. Behavior depends on whether a path is
+        provided and whether the database already exists.
+
+        Default behavior:
+        - If `name_or_path` is None, the default database is used.
+        - If it does not exist, it will be created.
+        - If it exists, it will be opened and unlocked.
+        - If `name_or_path` is provided:
+        - If the database exists, it will be opened.
+        - If it does not exist, it will only be created if `create=True`,
+            otherwise a FileNotFoundError is raised.
+
+        Args:
+            name_or_path (str | os.PathLike | None):
+                Name or filesystem path of the database. If None, the default
+                database location is used.
+
+            create (bool | None):
+                Whether to create the database if it does not exist.
+                - If None, defaults to True when using the default database,
+                and False otherwise.
+                - If False and the database does not exist, raises FileNotFoundError.
+
+            unlock (bool):
+                Whether to unlock the database after opening. Ignored when creating
+                a new database.
+
+            password (str | None):
+                Password used to initialize or unlock the database.
+                - If creating a new database and None, the user is prompted.
+                - If unlocking an existing database and None, the underlying
+                keypass logic may prompt for input.
+
+        Raises:
+            FileNotFoundError:
+                If the database does not exist and `create` is False.
+        """
+        path = kp.db.core.resolve_db_path(name_or_path)
+        if create is None:
+            create = name_or_path is None
+        if path.exists():
+            create = False
+        elif create is False:
+            raise FileNotFoundError("Database does not exist")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        super().__init__(path)
+        if create:
+            if password is None:
+                password = getpass(f"Create password for new Accounts database '{path.stem}': ")
+            self.initialize(password)
+        elif unlock:
+            self.unlock(password)
+        self._is_default = kp.db.core.resolve_db_path(None) == path
+
+    def _make_account(self, address: str) -> Account:
+        return Account(address, db=self)
+
+    def __repr__(self) -> str:
+        state = "unlocked" if self.is_unlocked else "locked"
+        name = f"'{self.path.stem}' " if not self._is_default else ""
+        return f"<Accounts {name}{state}>"
 
 
 class Account(kp.Account):
