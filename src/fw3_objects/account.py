@@ -202,12 +202,12 @@ class Account(kp.Account):
                     max_priority_fee_per_gas = chain.priority_fee()
                 if max_fee_per_gas is None:
                     # query this value last because it flushes the batch queue
-                    max_fee_per_gas = chain.base_fee() * 1.25
+                    max_fee_per_gas = int(chain.base_fee() * 1.25)
 
         if gas_buffer is not None:
             if gas_buffer < 1:
                 raise ValueError("Gas buffer must be at least 1")
-            gas_limit *= gas_buffer
+            gas_limit = int(gas_limit * gas_buffer)
 
         tx = build_transaction_object(
             from_=self.address,
@@ -222,7 +222,7 @@ class Account(kp.Account):
             chain_id=int(chain),
         )
         raw_tx = self.sign_transaction(tx)
-        return chain.w3.eth.send_raw_transaction(raw_tx)
+        return chain.w3.eth.send_raw_transaction(raw_tx.raw_transaction)
 
     def get_deployment_address(
         self,
