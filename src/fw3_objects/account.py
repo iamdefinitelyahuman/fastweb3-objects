@@ -251,8 +251,11 @@ class Account(kp.Account):
     ) -> Chain:
         if self._bound_chain is None:
             if chain is None:
-                raise NoActiveChain("No chain specified for unbound Account")
-            resolved = Chain(chain)
+                resolved, _ = Chain._get_default_chain()
+                if resolved is None:
+                    raise NoActiveChain("No chain specified for unbound Account")
+            else:
+                resolved = Chain(chain)
         else:
             if chain is not None:
                 if self._bound_chain != Chain(chain):

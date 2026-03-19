@@ -19,21 +19,27 @@ class _DefaultChainContext(AbstractContextManager["Chain"]):
     def __init__(self, chain: "Chain", *, strict: bool = False) -> None:
         self._chain = chain
         self._strict = strict
-        self._previous: Chain | None = None
+        self._previous: tuple[Chain | None, bool] = (None, False)
 
     def __enter__(self) -> "Chain":
         self._previous = Chain._get_default_chain()
+        previous_chain, previous_strict = self._previous
 
-        if self._strict and self._previous is not None and self._previous is not self._chain:
+        if previous_strict:
             raise ChainMismatch(
-                self._previous, self._chain, reason="default Chain context manager in strict mode"
+                previous_chain, self._chain, "cannot nest default Chain contexts inside strict mode"
             )
 
-        Chain._set_default_chain(self._chain)
+        if self._strict and previous_chain is not None and previous_chain is not self._chain:
+            raise ChainMismatch(
+                previous_chain, self._chain, "default Chain context manager in strict mode"
+            )
+
+        Chain._set_default_chain(self._chain, self._strict)
         return self._chain
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        Chain._set_default_chain(self._previous)
+        Chain._set_default_chain(*self._previous)
         return None
 
 
@@ -138,7 +144,22 @@ class Chain:
 
     @property
     def w3(self) -> Web3:
-        """Return the configured ``Web3`` instance."""
+        """
+        Return the configured ``Web3`` instance for this chain.
+
+        The instance is created lazily on first access.
+
+        When a default chain context is active in strict mode, access is only
+        permitted on that chain. Attempting to access ``w3`` on any other chain
+        will raise.
+
+        Raises:
+            ChainMismatch: If a strict default chain context is active and this
+                chain is not the default.
+        """
+        default_chain, strict = self._get_default_chain()
+        if strict and default_chain is not None and default_chain is not self:
+            raise ChainMismatch(default_chain, self, "strict default chain")
         if self._w3 is None:
             self._create_w3(**self._w3_params)
         return self._w3
@@ -255,12 +276,16 @@ class Chain:
         self._w3 = Web3(chain_id=self.id, **self._w3_params)
 
     @classmethod
-    def _get_default_chain(cls) -> "Chain | None":
-        return getattr(cls._thread_local, "default_chain", None)
+    def _get_default_chain(cls) -> tuple["Chain | None", bool]:
+        return (
+            getattr(cls._thread_local, "default_chain", None),
+            getattr(cls._thread_local, "default_chain_strict", False),
+        )
 
     @classmethod
-    def _set_default_chain(cls, chain: "Chain | None") -> None:
+    def _set_default_chain(cls, chain: "Chain | None", strict: bool) -> None:
         cls._thread_local.default_chain = chain
+        cls._thread_local.default_chain_strict = strict
 
 
 def configure_chain(chain: Chain | int, **w3_params: Any) -> None:
