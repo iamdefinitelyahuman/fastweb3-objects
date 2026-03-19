@@ -213,7 +213,7 @@ class Chain:
             poll_interval: Target polling interval in seconds.
 
         Yields:
-            Blocks at the buffered height whenever that height changes.
+            Each new buffered block, in ascending height order.
 
         Raises:
             ValueError: If ``height_buffer`` is negative.
@@ -231,9 +231,9 @@ class Chain:
             started_at = time.monotonic()
             current_height = max(0, self.height() - height_buffer)
 
-            if current_height != last_height:
-                last_height = current_height
-                yield self.get_block(current_height)
+            while current_height > last_height:
+                last_height += 1
+                yield self.get_block(last_height)
 
             elapsed = time.monotonic() - started_at
             time.sleep(max(0, poll_interval - elapsed))
