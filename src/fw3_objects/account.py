@@ -133,8 +133,8 @@ class Account(kp.Account):
 
     def call(
         self,
-        *,
         to: str | None = None,
+        *,
         value: int | str | None = None,
         data: bytes | str | None = None,
         gas_limit: int | str | None = None,
@@ -159,9 +159,9 @@ class Account(kp.Account):
 
     def estimate_gas(
         self,
-        *,
         to: str | None = None,
         value: int | str | None = None,
+        *,
         data: bytes | str | None = None,
         chain: Chain | int | None = None,
     ) -> int:
@@ -175,9 +175,9 @@ class Account(kp.Account):
 
     def transact(
         self,
-        *,
         to: str | None = None,
         value: int | str | None = None,
+        *,
         data: bytes | str | None = None,
         gas_limit: int | str | None = None,
         gas_buffer: float | None = None,
