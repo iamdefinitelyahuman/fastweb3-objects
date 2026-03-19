@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from getpass import getpass
-from typing import Any, Mapping
+from typing import Any
 
 import fw3_keypass as kp
 from Crypto.Hash import keccak
-from fw3 import Web3
 from fw3.formatters import build_transaction_object
 from fw3_keypass.crypto.rlp import rlp_encode
 from fw3_keypass.db.core import resolve_db_path
@@ -111,7 +110,7 @@ class Account(kp.Account):
         """
         Return native token balance for this account.
         """
-        w3 = self._resolve_w3(chain)
+        w3 = self._resolve_chain(chain).w3
         if block_identifier is None:
             return w3.eth.get_balance(self.address)
         else:
@@ -126,128 +125,104 @@ class Account(kp.Account):
         """
         Return the transaction nonce for this account.
         """
-        w3 = self._resolve_w3(chain)
+        w3 = self._resolve_chain(chain).w3
         if block_identifier is None:
             return w3.eth.get_transaction_count(self.address)
         else:
             return w3.eth.get_transaction_count(self.address, block_identifier)
 
-    # --- execution ---
-
     def call(
         self,
         *,
         to: str | None = None,
-        data: bytes | str | None = None,
         value: int | str | None = None,
-        gas: int | str | None = None,
-        gas_price: int | str | None = None,
-        max_fee_per_gas: int | str | None = None,
-        max_priority_fee_per_gas: int | str | None = None,
-        nonce: int | str | None = None,
-        chain_id: int | str | None = None,
-        type_: int | str | None = None,
-        access_list: list[Mapping[str, Any]] | None = None,
+        data: bytes | str | None = None,
+        gas_limit: int | str | None = None,
         chain: Chain | int | None = None,
         block_identifier: str | int | None = None,
     ) -> Any:
         """
         Perform an eth_call as this account without broadcasting a transaction.
         """
-        w3 = self._resolve_w3(chain)
+        chain = self._resolve_chain(chain)
         tx_kwargs = dict(
             from_=self.address,
             to=to,
-            gas=gas,
-            gas_price=gas_price,
-            max_fee_per_gas=max_fee_per_gas,
-            max_priority_fee_per_gas=max_priority_fee_per_gas,
+            gas=gas_limit,
             value=value,
             data=data,
-            nonce=nonce,
-            chain_id=chain_id,
-            type_=type_,
-            access_list=access_list,
+            chain_id=int(chain),
             block=block_identifier,
         )
         tx_kwargs = {k: v for k, v in tx_kwargs.items() if v is not None}
-        return w3.eth.call(**tx_kwargs)
+        return chain.w3.eth.call(**tx_kwargs)
 
     def estimate_gas(
         self,
         *,
         to: str | None = None,
-        data: bytes | str | None = None,
         value: int | str | None = None,
-        gas: int | str | None = None,
-        gas_price: int | str | None = None,
-        max_fee_per_gas: int | str | None = None,
-        max_priority_fee_per_gas: int | str | None = None,
-        nonce: int | str | None = None,
-        chain_id: int | str | None = None,
-        type_: int | str | None = None,
-        access_list: list[Mapping[str, Any]] | None = None,
+        data: bytes | str | None = None,
         chain: Chain | int | None = None,
-        block_identifier: str | int | None = None,
     ) -> int:
         """
         Estimate gas for a transaction originating from this account.
         """
-        w3 = self._resolve_w3(chain)
-        tx_kwargs = dict(
-            from_=self.address,
-            to=to,
-            gas=gas,
-            gas_price=gas_price,
-            max_fee_per_gas=max_fee_per_gas,
-            max_priority_fee_per_gas=max_priority_fee_per_gas,
-            value=value,
-            data=data,
-            nonce=nonce,
-            chain_id=chain_id,
-            type_=type_,
-            access_list=access_list,
-            block=block_identifier,
-        )
+        chain = self._resolve_chain(chain)
+        tx_kwargs = dict(from_=self.address, to=to, value=value, data=data, chain_id=int(chain))
         tx_kwargs = {k: v for k, v in tx_kwargs.items() if v is not None}
-        return w3.eth.estimate_gas(**tx_kwargs)
+        return chain.w3.eth.estimate_gas(**tx_kwargs)
 
     def transact(
         self,
         *,
         to: str | None = None,
-        data: bytes | str | None = None,
         value: int | str | None = None,
-        gas: int | str | None = None,
+        data: bytes | str | None = None,
+        gas_limit: int | str | None = None,
+        gas_buffer: float | None = None,
         gas_price: int | str | None = None,
         max_fee_per_gas: int | str | None = None,
         max_priority_fee_per_gas: int | str | None = None,
         nonce: int | str | None = None,
-        chain_id: int | str | None = None,
-        type_: int | str | None = None,
-        access_list: list[Mapping[str, Any]] | None = None,
         chain: Chain | int | None = None,
     ) -> Any:
         """
         Sign and broadcast a transaction from this account.
         """
-        w3 = self._resolve_w3(chain)
+        chain = self._resolve_chain(chain)
+
+        with chain.w3.batch_requests():
+            if nonce is None:
+                nonce = self.nonce(chain=chain)
+            if gas_limit is None:
+                gas_limit = self.estimate_gas(to=to, value=value, data=data, chain=chain)
+            if gas_price is None:
+                if max_priority_fee_per_gas is None:
+                    max_priority_fee_per_gas = chain.priority_fee()
+                if max_fee_per_gas is None:
+                    # query this value last because it flushes the batch queue
+                    max_fee_per_gas = chain.base_fee() * 1.25
+
+        if gas_buffer is not None:
+            if gas_buffer < 1:
+                raise ValueError("Gas buffer must be at least 1")
+            gas_limit *= gas_buffer
+
         tx = build_transaction_object(
             from_=self.address,
             to=to,
-            gas=gas,
+            gas=gas_limit,
             gas_price=gas_price,
             max_fee_per_gas=max_fee_per_gas,
             max_priority_fee_per_gas=max_priority_fee_per_gas,
             value=value,
             data=data,
             nonce=nonce,
-            chain_id=chain_id,
-            type_=type_,
-            access_list=access_list,
+            chain_id=int(chain),
         )
         raw_tx = self.sign_transaction(tx)
-        return w3.eth.send_raw_transaction(raw_tx)
+        return chain.w3.eth.send_raw_transaction(raw_tx)
 
     def get_deployment_address(
         self,
@@ -270,10 +245,10 @@ class Account(kp.Account):
         digest = keccak.new(digest_bits=256, data=encoded).digest()
         return checksum_address("0x" + digest[-20:].hex())
 
-    def _resolve_w3(
+    def _resolve_chain(
         self,
         chain: Chain | int | None,
-    ) -> Web3:
+    ) -> Chain:
         if self._bound_chain is None:
             if chain is None:
                 raise NoActiveChain("No chain specified for unbound Account")
@@ -284,4 +259,4 @@ class Account(kp.Account):
                     raise ChainMismatch(self._bound_chain, chain, "bound Account")
             resolved = self._bound_chain
 
-        return resolved.w3
+        return resolved
