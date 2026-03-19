@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager
 from typing import Any
 
 from fw3 import Web3
+from fw3.deferred import deferred_response
 from fw3.validation import block_ref, hash32
 
 from .errors import ChainMismatch
@@ -85,7 +86,8 @@ class Chain:
 
     def __len__(self) -> int:
         """Return the number of addressable block indices."""
-        return self.height() + 1
+        height = self.height()
+        return deferred_response(None, ref_func=lambda h: h.set_value(height + 1))
 
     def __getitem__(self, block_number: int):
         """Return a block by number.
@@ -101,6 +103,11 @@ class Chain:
         Raises:
             TypeError: If ``block_number`` is not an integer.
             IndexError: If a negative index resolves before genesis.
+
+        Notes:
+            Negative indices (``-2`` and below) require an additional RPC call to
+            resolve the latest block height. As a result, accessing the returned
+            value will perform I/O on first use.
         """
 
         if isinstance(block_number, slice):
@@ -109,12 +116,20 @@ class Chain:
         if not isinstance(block_number, int):
             raise TypeError("block_number must be int")
 
-        if block_number < 0:
-            block_number = self.height() + 1 + block_number
-            if block_number < 0:
-                raise IndexError("block index out of range")
+        if block_number > -2:
+            if block_number == -1:
+                block_number = "latest"
+            return self.get_block(block_number)
 
-        return self.get_block(block_number)
+        height = self.height()
+
+        def ref_func(handle):
+            blk = height + 1 + block_number
+            if blk < 0:
+                raise IndexError("block index out of range")
+            handle.set_value(self.get_block(blk))
+
+        return deferred_response(None, ref_func=ref_func)
 
     @property
     def id(self) -> int:
@@ -134,13 +149,16 @@ class Chain:
 
     def block_gas_limit(self) -> int:
         """Return the gas limit of the latest block."""
-        block = self[-1]
+        block = self.get_block("latest")
 
-        return block["gasLimit"]
+        return deferred_response(None, ref_func=lambda h: h.set_value(block["gasLimit"]))
 
     def base_fee(self) -> int:
         """Return the base fee per gas of the latest block."""
-        return self.w3.eth.fee_history(1, "latest", [])["baseFeePerGas"][0]
+        fee_history = self.w3.eth.fee_history(1, "latest", [])
+        return deferred_response(
+            None, ref_func=lambda h: h.set_value(fee_history["baseFeePerGas"][0])
+        )
 
     def priority_fee(self) -> int:
         """Return the suggested max priority fee per gas."""
