@@ -60,10 +60,10 @@ class DummyWeb3:
 @pytest.fixture(autouse=True)
 def reset_chain_state() -> None:
     Chain._instances.clear()
-    Chain._set_default_chain(None)
+    Chain._set_default_chain(None, False)
     yield
     Chain._instances.clear()
-    Chain._set_default_chain(None)
+    Chain._set_default_chain(None, False)
 
 
 @pytest.fixture
@@ -72,6 +72,10 @@ def chain_module(monkeypatch):
 
     monkeypatch.setattr(chain_module, "Web3", DummyWeb3)
     return chain_module
+
+
+def _default_chain() -> Chain | None:
+    return Chain._get_default_chain()[0]
 
 
 def test_chain_is_canonical_per_chain_id(chain_module) -> None:
@@ -97,11 +101,8 @@ def test_init_creates_default_web3_once_per_canonical_instance(monkeypatch, chai
     chain_b = Chain(1)
 
     assert chain_a is chain_b
-
-    # w3 object isn't created until first access
     assert calls == []
 
-    # inspection triggers creation
     assert chain_a.w3 is not None
     assert calls == [(1, {})]
 
@@ -175,9 +176,9 @@ def test_getitem_with_negative_index_is_relative_to_tip(chain_module) -> None:
     latest = chain[-1]
     third_from_tip = chain[-3]
 
-    assert latest["number"] == 12
+    assert latest["number"] == "latest"
     assert third_from_tip["number"] == 10
-    assert chain.w3.eth.block_by_number_calls == ["0xc", "0xa"]
+    assert chain.w3.eth.block_by_number_calls == ["latest", "0xa"]
 
 
 def test_getitem_rejects_slice(chain_module) -> None:
@@ -198,16 +199,16 @@ def test_getitem_negative_index_out_of_range_raises_index_error(chain_module) ->
     chain = Chain(1)
     chain.w3.eth._block_number = 2
 
+    block = chain[-4]
     with pytest.raises(IndexError, match="block index out of range"):
-        chain[-4]
+        block["number"]
 
 
 def test_block_gas_limit_uses_latest_block(chain_module) -> None:
     chain = Chain(1)
-    chain.w3.eth._block_number = 9
 
-    assert chain.block_gas_limit() == 9000
-    assert chain.w3.eth.block_by_number_calls == ["0x9"]
+    assert int(chain.block_gas_limit()) == 123
+    assert chain.w3.eth.block_by_number_calls == ["latest"]
 
 
 def test_base_fee_uses_fee_history(chain_module) -> None:
@@ -304,13 +305,13 @@ def test_get_block_uses_number_method_for_non_hash_refs(
 def test_as_default_sets_and_restores_default_chain(chain_module) -> None:
     chain = Chain(1)
 
-    assert Chain._get_default_chain() is None
+    assert Chain._get_default_chain() == (None, False)
 
     with chain.as_default() as active:
         assert active is chain
-        assert Chain._get_default_chain() is chain
+        assert Chain._get_default_chain() == (chain, False)
 
-    assert Chain._get_default_chain() is None
+    assert Chain._get_default_chain() == (None, False)
 
 
 def test_as_default_restores_previous_chain_after_nested_contexts(chain_module) -> None:
@@ -318,14 +319,14 @@ def test_as_default_restores_previous_chain_after_nested_contexts(chain_module) 
     chain_b = Chain(2)
 
     with chain_a.as_default():
-        assert Chain._get_default_chain() is chain_a
+        assert _default_chain() is chain_a
 
         with chain_b.as_default():
-            assert Chain._get_default_chain() is chain_b
+            assert _default_chain() is chain_b
 
-        assert Chain._get_default_chain() is chain_a
+        assert _default_chain() is chain_a
 
-    assert Chain._get_default_chain() is None
+    assert _default_chain() is None
 
 
 def test_as_default_strict_raises_on_mismatch(chain_module) -> None:
@@ -333,9 +334,32 @@ def test_as_default_strict_raises_on_mismatch(chain_module) -> None:
     chain_b = Chain(2)
 
     with chain_a.as_default():
-        with pytest.raises(ChainMismatch, match="default chain already set"):
+        with pytest.raises(ChainMismatch, match="default Chain context manager in strict mode"):
             with chain_b.as_default(strict=True):
                 pass
+
+
+def test_as_default_rejects_nesting_inside_existing_strict_context(chain_module) -> None:
+    chain_a = Chain(1)
+    chain_b = Chain(2)
+
+    with chain_a.as_default(strict=True):
+        with pytest.raises(
+            ChainMismatch,
+            match="cannot nest default Chain contexts inside strict mode",
+        ):
+            with chain_b.as_default():
+                pass
+
+
+def test_w3_property_rejects_access_outside_strict_default(chain_module) -> None:
+    chain_a = Chain(1)
+    chain_b = Chain(2)
+
+    with chain_a.as_default(strict=True):
+        assert chain_a.w3 is not None
+        with pytest.raises(ChainMismatch, match="strict default chain"):
+            _ = chain_b.w3
 
 
 def test_default_chain_is_thread_local(chain_module) -> None:
@@ -346,16 +370,16 @@ def test_default_chain_is_thread_local(chain_module) -> None:
     with chain_main.as_default():
 
         def worker() -> None:
-            results["before"] = Chain._get_default_chain()
+            results["before"] = _default_chain()
             with chain_other.as_default():
-                results["inside"] = Chain._get_default_chain()
-            results["after"] = Chain._get_default_chain()
+                results["inside"] = _default_chain()
+            results["after"] = _default_chain()
 
         thread = threading.Thread(target=worker)
         thread.start()
         thread.join()
 
-        assert Chain._get_default_chain() is chain_main
+        assert _default_chain() is chain_main
 
     assert results == {
         "before": None,
@@ -402,8 +426,8 @@ def test_new_blocks_yields_only_when_buffered_height_changes(monkeypatch, chain_
     generator = chain.new_blocks(height_buffer=1, poll_interval=5.0)
     block = next(generator)
 
-    assert block == {"number": 11}
-    assert block_calls == [11]
+    assert block == {"number": 10}
+    assert block_calls == [10]
     assert sleep_calls == pytest.approx([4.6])
 
 
@@ -425,7 +449,9 @@ def test_new_blocks_sleeps_zero_when_loop_body_exceeds_poll_interval(
     monkeypatch.setattr(chain_module.time, "sleep", fake_sleep)
 
     generator = chain.new_blocks(poll_interval=5.0)
-    block = next(generator)
+    first = next(generator)
+    second = next(generator)
 
-    assert block == {"number": 7}
+    assert first == {"number": 6}
+    assert second == {"number": 7}
     assert sleep_calls == [0]
