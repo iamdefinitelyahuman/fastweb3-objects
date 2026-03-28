@@ -16,6 +16,7 @@ authors = [
 dependencies = [
     "fastweb3>=0.1.4,<0.2.0",
     "fastweb3-keypass>=0.1.2,<0.2.0",
+    "pycryptodome>=3.20",
 ]
 
 [project.optional-dependencies]
