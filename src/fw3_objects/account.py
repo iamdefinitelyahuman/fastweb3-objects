@@ -131,6 +131,31 @@ class Account(kp.Account):
         else:
             return w3.eth.get_transaction_count(self.address, block_identifier)
 
+    def bytecode(
+        self,
+        *,
+        chain: Chain | int | None = None,
+        block_identifier: str | int | None = None,
+    ):
+        w3 = self._resolve_chain(chain).w3
+        if block_identifier is None:
+            return w3.eth.get_code(self.address)
+        else:
+            return w3.eth.get_code(self.address, block_identifier)
+
+    def storage(
+        self,
+        position: int | str,
+        *,
+        chain: Chain | int | None = None,
+        block_identifier: str | int | None = None,
+    ):
+        w3 = self._resolve_chain(chain).w3
+        if block_identifier is None:
+            return w3.eth.get_storage_at(self.address, position)
+        else:
+            return w3.eth.get_storage_at(self.address, position, block_identifier)
+
     def call(
         self,
         to: str | None = None,
