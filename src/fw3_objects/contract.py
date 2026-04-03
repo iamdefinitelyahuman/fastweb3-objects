@@ -2,6 +2,9 @@ import json
 from pathlib import Path
 
 from Crypto.Hash import keccak
+from eth.codecs.abi import decode as abi_decode
+from eth.codecs.abi import encode as abi_encode
+from fw3.deferred import deferred_response
 
 from .account import Account
 from .chain import Chain
@@ -51,6 +54,23 @@ def _method_class(method_abi: dict) -> type["_ContractMethod"]:
     if mutability in ("view", "pure"):
         return ContractCall
     return ContractTx
+
+
+def _abi_item_type(item: dict) -> str:
+    item_type = item["type"]
+
+    if not item_type.startswith("tuple"):
+        return item_type
+
+    suffix = item_type[5:]
+    components = item.get("components", [])
+    inner = ",".join(_abi_item_type(component) for component in components)
+    return f"({inner}){suffix}"
+
+
+def _abi_schema(items: list[dict]) -> str:
+    types = ",".join(_abi_item_type(item) for item in items)
+    return f"({types})"
 
 
 class Contract:
@@ -119,15 +139,15 @@ class _ContractMethod:
         if sender is None:
             sender = Account("0x0000000000000000000000000000000000000000")
         data = self.encode_input(*args)
-        # TODO decode output and return as a Handle
-        return sender.call(
-            to=self.address,
+        resp = sender.call(
+            to=str(self.address),
             value=value,
             data=data,
             gas_limit=gas_limit,
             chain=self.chain,
             block_identifier=block_identifier,
         )
+        return deferred_response(None, ref_func=lambda h: h.set_value(self.decode_output(resp)))
 
     def estimate_gas(self, *args, sender: Account, value: int | str | None = None):
         data = self.encode_input(*args)
@@ -147,7 +167,7 @@ class _ContractMethod:
     ):
         data = self.encode_input(*args)
         return sender.transact(
-            to=self.address,
+            to=str(self.address),
             value=value,
             data=data,
             gas_limit=gas_limit,
@@ -159,12 +179,36 @@ class _ContractMethod:
             nonce=nonce,
         )
 
-    # TODO
-    def decode_input(self, hexstr: str): ...
+    def decode_input(self, hexstr: str):
+        data = bytes.fromhex(hexstr)
 
-    def encode_input(self, *args): ...
+        if len(data) < 4:
+            raise ValueError("Input data is shorter than a function selector")
 
-    def decode_output(self, hexstr: str): ...
+        selector = data[:4]
+        if selector != self.selector:
+            raise ValueError(
+                f"Input selector 0x{selector.hex()} does not match "
+                "method selector 0x{self.selector.hex()}"
+            )
+
+        schema = _abi_schema(self.method_abi.get("inputs", []))
+        return abi_decode(schema, data[4:])
+
+    def encode_input(self, *args):
+        schema = _abi_schema(self.method_abi.get("inputs", []))
+        data = self.selector + abi_encode(schema, args)
+        return f"0x{data.hex()}"
+
+    def decode_output(self, hexstr: str):
+        schema = _abi_schema(self.method_abi.get("outputs", []))
+        values = abi_decode(schema, bytes.fromhex(hexstr))
+
+        if len(values) == 0:
+            return None
+        if len(values) == 1:
+            return values[0]
+        return values
 
 
 class ContractCall(_ContractMethod):
