@@ -67,12 +67,22 @@ class Contract:
         self.abi = _load_abi(abi)
 
         function_abis = [i for i in self.abi if i.get("type", "function") == "function"]
-        # TODO overloaded methods
+        functions = {}
 
         for method_abi in function_abis:
             name = method_abi["name"]
-            cls = _method_class(method_abi)
-            method = cls(address=self.address, method_abi=method_abi, chain=chain)
+            functions.setdefault(name, []).append(method_abi)
+
+        for name, method_abis in functions.items():
+            if len(method_abis) == 1:
+                method_abi = method_abis[0]
+                cls = _method_class(method_abi)
+                method = cls(address=self.address, method_abi=method_abi, chain=chain)
+            else:
+                method = OverloadedMethod(
+                    address=self.address, method_abis=method_abis, chain=chain
+                )
+
             setattr(self, name, method)
 
 
@@ -164,6 +174,153 @@ class _ContractMethod:
 
     def decode_output(self, hexstr: str):
         return abi.decode_returndata(self.method_abi, hexstr)
+
+
+class OverloadedMethod:
+    def __init__(self, address: Account, method_abis: list[dict], chain: Chain):
+        self.address = address
+        self.chain = chain
+        self.method_abis = method_abis
+
+    @property
+    def name(self) -> str:
+        return self.method_abis[0]["name"]
+
+    @property
+    def signatures(self) -> list[str]:
+        return [abi.function_signature(i) for i in self.method_abis]
+
+    def _make_method(self, method_abi: dict) -> _ContractMethod:
+        cls = _method_class(method_abi)
+        return cls(address=self.address, method_abi=method_abi, chain=self.chain)
+
+    def _input_types(self, method_abi: dict) -> tuple[str, ...]:
+        return tuple(i["type"] for i in method_abi.get("inputs", []))
+
+    def _format_available_overloads(self) -> str:
+        return "\n".join(self.signatures)
+
+    def _resolve_by_args(self, args: tuple) -> _ContractMethod:
+        matches = [i for i in self.method_abis if len(i.get("inputs", [])) == len(args)]
+
+        if len(matches) == 1:
+            return self._make_method(matches[0])
+
+        if not matches:
+            raise ValueError(
+                f"No matching overload for {self.name} with {len(args)} arguments. "
+                f"Available overloads:\n{self._format_available_overloads()}"
+            )
+
+        raise ValueError(
+            f"Ambiguous overload for {self.name} with {len(args)} arguments. "
+            f"Available overloads:\n{self._format_available_overloads()}"
+        )
+
+    def _normalize_key(self, key) -> tuple[str, ...]:
+        if isinstance(key, str):
+            if not key:
+                return ()
+            return tuple(i.strip() for i in key.split(","))
+        if isinstance(key, tuple):
+            if not all(isinstance(i, str) for i in key):
+                raise TypeError("Overload selector tuple must contain only strings")
+            return tuple(i.strip() for i in key)
+        raise TypeError("Overload selector must be a comma-separated string or tuple of strings")
+
+    def __getitem__(self, key):
+        input_types = self._normalize_key(key)
+        matches = [i for i in self.method_abis if self._input_types(i) == input_types]
+
+        if not matches:
+            raise ValueError(
+                f"No overload for {self.name} with input types {input_types}. "
+                f"Available overloads:\n{self._format_available_overloads()}"
+            )
+
+        return self._make_method(matches[0])
+
+    def call(
+        self,
+        *args,
+        sender: Account = None,
+        value: int | str | None = None,
+        gas_limit: int | str | None = None,
+        block_identifier: str | int | None = None,
+    ):
+        method = self._resolve_by_args(args)
+        return method.call(
+            *args,
+            sender=sender,
+            value=value,
+            gas_limit=gas_limit,
+            block_identifier=block_identifier,
+        )
+
+    def estimate_gas(self, *args, sender: Account, value: int | str | None = None):
+        method = self._resolve_by_args(args)
+        return method.estimate_gas(*args, sender=sender, value=value)
+
+    def transact(
+        self,
+        *args,
+        sender: Account,
+        value: int | str | None = None,
+        gas_limit: int | str | None = None,
+        gas_buffer: float | None = None,
+        gas_price: int | str | None = None,
+        max_fee_per_gas: int | str | None = None,
+        max_priority_fee_per_gas: int | str | None = None,
+        nonce: int | str | None = None,
+    ):
+        method = self._resolve_by_args(args)
+        return method.transact(
+            *args,
+            sender=sender,
+            value=value,
+            gas_limit=gas_limit,
+            gas_buffer=gas_buffer,
+            gas_price=gas_price,
+            max_fee_per_gas=max_fee_per_gas,
+            max_priority_fee_per_gas=max_priority_fee_per_gas,
+            nonce=nonce,
+        )
+
+    def __call__(
+        self,
+        *args,
+        sender=None,
+        value: int | str | None = None,
+        gas_limit: int | str | None = None,
+        gas_buffer: float | None = None,
+        gas_price: int | str | None = None,
+        max_fee_per_gas: int | str | None = None,
+        max_priority_fee_per_gas: int | str | None = None,
+        nonce: int | str | None = None,
+        block_identifier: str | int | None = None,
+    ):
+        method = self._resolve_by_args(args)
+
+        if isinstance(method, ContractCall):
+            return method(
+                *args,
+                sender=sender,
+                value=value,
+                gas_limit=gas_limit,
+                block_identifier=block_identifier,
+            )
+
+        return method(
+            *args,
+            sender=sender,
+            value=value,
+            gas_limit=gas_limit,
+            gas_buffer=gas_buffer,
+            gas_price=gas_price,
+            max_fee_per_gas=max_fee_per_gas,
+            max_priority_fee_per_gas=max_priority_fee_per_gas,
+            nonce=nonce,
+        )
 
 
 class ContractCall(_ContractMethod):
