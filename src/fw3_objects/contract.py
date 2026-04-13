@@ -1,11 +1,9 @@
 import json
 from pathlib import Path
 
-from Crypto.Hash import keccak
-from eth.codecs.abi import decode as abi_decode
-from eth.codecs.abi import encode as abi_encode
 from fw3.deferred import deferred_response
 
+from . import abi
 from .account import Account
 from .chain import Chain
 from .errors import NoActiveChain
@@ -56,23 +54,6 @@ def _method_class(method_abi: dict) -> type["_ContractMethod"]:
     return ContractTx
 
 
-def _abi_item_type(item: dict) -> str:
-    item_type = item["type"]
-
-    if not item_type.startswith("tuple"):
-        return item_type
-
-    suffix = item_type[5:]
-    components = item.get("components", [])
-    inner = ",".join(_abi_item_type(component) for component in components)
-    return f"({inner}){suffix}"
-
-
-def _abi_schema(items: list[dict]) -> str:
-    types = ",".join(_abi_item_type(item) for item in items)
-    return f"({types})"
-
-
 class Contract:
     def __init__(
         self, address: Account | str, abi: list | str | Path, chain: Chain | int | None = None
@@ -103,16 +84,11 @@ class _ContractMethod:
 
     @property
     def signature(self) -> str:
-        name = self.method_abi["name"]
-        inputs = self.method_abi.get("inputs", [])
-        types = ",".join(i["type"] for i in inputs)
-        return f"{name}({types})"
+        return abi.function_signature(self.method_abi)
 
     @property
     def selector(self) -> bytes:
-        k = keccak.new(digest_bits=256)
-        k.update(self.signature.encode())
-        return k.digest()[:4]
+        return abi.function_selector(self.method_abi)
 
     @property
     def mutability(self) -> str:
@@ -180,35 +156,14 @@ class _ContractMethod:
         )
 
     def decode_input(self, hexstr: str):
-        data = bytes.fromhex(hexstr)
-
-        if len(data) < 4:
-            raise ValueError("Input data is shorter than a function selector")
-
-        selector = data[:4]
-        if selector != self.selector:
-            raise ValueError(
-                f"Input selector 0x{selector.hex()} does not match "
-                "method selector 0x{self.selector.hex()}"
-            )
-
-        schema = _abi_schema(self.method_abi.get("inputs", []))
-        return abi_decode(schema, data[4:])
+        return abi.decode_calldata(self.method_abi, hexstr)
 
     def encode_input(self, *args):
-        schema = _abi_schema(self.method_abi.get("inputs", []))
-        data = self.selector + abi_encode(schema, args)
-        return f"0x{data.hex()}"
+        # TODO: argument coercion + validation
+        return abi.encode_calldata(self.method_abi, args)
 
     def decode_output(self, hexstr: str):
-        schema = _abi_schema(self.method_abi.get("outputs", []))
-        values = abi_decode(schema, bytes.fromhex(hexstr))
-
-        if len(values) == 0:
-            return None
-        if len(values) == 1:
-            return values[0]
-        return values
+        return abi.decode_returndata(self.method_abi, hexstr)
 
 
 class ContractCall(_ContractMethod):
