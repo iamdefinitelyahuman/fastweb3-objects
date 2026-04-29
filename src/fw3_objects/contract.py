@@ -1,12 +1,16 @@
 import json
+import weakref
+from dataclasses import dataclass
 from pathlib import Path
 
 from fw3.deferred import deferred_response
 
 from . import abi
 from .account import Account
+from .cache.metadata import AddressMetadataCache
 from .chain import Chain
 from .errors import NoActiveChain
+from .explorers.abi import HIGH_PRIORITY, fetch_abi
 
 
 def _load_abi(abi):
@@ -54,36 +58,100 @@ def _method_class(method_abi: dict) -> type["_ContractMethod"]:
     return ContractTx
 
 
+@dataclass
+class _ContractState:
+    chain: Chain
+    abi_job: object | None = None
+
+
+_CONTRACT_STATE = weakref.WeakKeyDictionary()
+
+
+def _install_abi(contract: "Contract", abi_list: list[dict]) -> None:
+    state = _CONTRACT_STATE[contract]
+
+    contract.abi = abi_list
+
+    function_abis = [i for i in contract.abi if i.get("type", "function") == "function"]
+    functions = {}
+
+    for method_abi in function_abis:
+        name = method_abi["name"]
+        functions.setdefault(name, []).append(method_abi)
+
+    for name, method_abis in functions.items():
+        if len(method_abis) == 1:
+            method_abi = method_abis[0]
+            cls = _method_class(method_abi)
+            method = cls(address=contract.address, method_abi=method_abi, chain=state.chain)
+        else:
+            method = OverloadedMethod(
+                address=contract.address, method_abis=method_abis, chain=state.chain
+            )
+
+        setattr(contract, name, method)
+
+
 class Contract:
     def __init__(
-        self, address: Account | str, abi: list | str | Path, chain: Chain | int | None = None
+        self,
+        address: Account | str,
+        abi: list | str | Path | None = None,
+        chain: Chain | int | None = None,
+        refresh_abi: bool | None = None,
     ):
         if chain is None:
-            chain = Chain._get_default_chain()
+            chain, _ = Chain._get_default_chain()
             if chain is None:
                 raise NoActiveChain("No chain specified for Contract")
 
+        chain = Chain(chain)
         self.address = Account(address, chain=chain)
-        self.abi = _load_abi(abi)
+        self.abi = []
+        _CONTRACT_STATE[self] = _ContractState(chain=chain)
 
-        function_abis = [i for i in self.abi if i.get("type", "function") == "function"]
-        functions = {}
+        cache = AddressMetadataCache()
 
-        for method_abi in function_abis:
-            name = method_abi["name"]
-            functions.setdefault(name, []).append(method_abi)
+        if abi is not None:
+            abi_list = _load_abi(abi)
+            _install_abi(self, abi_list)
 
-        for name, method_abis in functions.items():
-            if len(method_abis) == 1:
-                method_abi = method_abis[0]
-                cls = _method_class(method_abi)
-                method = cls(address=self.address, method_abi=method_abi, chain=chain)
-            else:
-                method = OverloadedMethod(
-                    address=self.address, method_abis=method_abis, chain=chain
-                )
+            if refresh_abi is True:
+                cache.set(chain.id, str(self.address), "abi", abi_list)
+            elif refresh_abi is None and cache.get(chain.id, str(self.address), "abi") is None:
+                cache.set(chain.id, str(self.address), "abi", abi_list)
+            return
 
-            setattr(self, name, method)
+        if refresh_abi is not True:
+            cached_abi = cache.get(chain.id, str(self.address), "abi")
+            if cached_abi is not None:
+                _install_abi(self, _load_abi(cached_abi))
+                return
+
+            if refresh_abi is False:
+                return
+
+        _CONTRACT_STATE[self].abi_job = fetch_abi(
+            chain.id,
+            str(self.address),
+            ignore_negative_cache=refresh_abi is True,
+        )
+
+    def __getattr__(self, name: str):
+        state = _CONTRACT_STATE[self]
+        if state.abi_job is None:
+            raise AttributeError(name)
+
+        state.abi_job.bump_priority(HIGH_PRIORITY)
+        abi_list = state.abi_job.wait()
+        state.abi_job = None
+        _install_abi(self, abi_list)
+        AddressMetadataCache().set(state.chain.id, str(self.address), "abi", abi_list)
+
+        try:
+            return object.__getattribute__(self, name)
+        except AttributeError:
+            raise AttributeError(name) from None
 
 
 class _ContractMethod:
