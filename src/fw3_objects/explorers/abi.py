@@ -222,7 +222,8 @@ def _fetch_abi(chain_id: int, address: str) -> list[dict]:
 def _providers():
     providers = []
 
-    etherscan_key = os.getenv("ETHERSCAN_API_KEY")
+    # quietly support ETHERSCAN_TOKEN for brownie users
+    etherscan_key = os.getenv("ETHERSCAN_API_KEY") or os.getenv("ETHERSCAN_TOKEN")
     if etherscan_key:
         providers.append(
             ("etherscan", etherscan.get_abi, etherscan_key, etherscan.RATE_LIMIT_COOLDOWN)
