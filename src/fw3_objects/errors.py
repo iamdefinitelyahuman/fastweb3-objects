@@ -21,6 +21,10 @@ class ExplorerError(FW3ObjectsError):
     pass
 
 
+class ExplorerConnectionError(ExplorerError):
+    pass
+
+
 class ExplorerRateLimited(ExplorerError):
     def __init__(self, provider: str, retry_after: float | None = None):
         self.provider = provider

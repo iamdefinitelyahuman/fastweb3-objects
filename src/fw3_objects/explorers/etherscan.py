@@ -4,7 +4,12 @@ import json
 
 import httpx
 
-from fw3_objects.errors import ABINotFound, ExplorerError, ExplorerRateLimited
+from fw3_objects.errors import (
+    ABINotFound,
+    ExplorerConnectionError,
+    ExplorerError,
+    ExplorerRateLimited,
+)
 
 BASE_URL = "https://api.etherscan.io/v2/api"
 RATE_LIMIT_COOLDOWN = 0.5
@@ -33,7 +38,7 @@ def get_abi(chain_id: int, address: str, api_key: str) -> list[dict]:
     try:
         response = httpx.get(BASE_URL, params=params, timeout=10)
     except httpx.HTTPError as exc:
-        raise ExplorerError(str(exc)) from exc
+        raise ExplorerConnectionError("Could not connect to Etherscan") from exc
 
     if response.status_code == 429:
         raise ExplorerRateLimited("etherscan", _retry_after(response))

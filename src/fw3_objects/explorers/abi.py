@@ -26,6 +26,17 @@ class ABILookupJob:
     _lock: threading.RLock = field(default_factory=threading.RLock, init=False)
     _abi: list[dict] | None = field(default=None, init=False)
     _error: BaseException | None = field(default=None, init=False)
+    _callbacks: list = field(default_factory=list, init=False)
+
+    def add_done_callback(self, callback) -> None:
+        with self._lock:
+            if not self._event.is_set():
+                self._callbacks.append(callback)
+                return
+            abi = self._abi
+
+        if abi is not None:
+            callback(abi)
 
     def bump_priority(self, priority: int) -> None:
         with self._lock:
@@ -43,11 +54,20 @@ class ABILookupJob:
     def set_result(self, abi: list[dict]) -> None:
         with self._lock:
             self._abi = abi
+            callbacks = tuple(self._callbacks)
+            self._callbacks.clear()
             self._event.set()
+
+        for callback in callbacks:
+            try:
+                callback(abi)
+            except Exception:
+                pass
 
     def set_error(self, error: BaseException) -> None:
         with self._lock:
             self._error = error
+            self._callbacks.clear()
             self._event.set()
 
     @property
@@ -70,6 +90,7 @@ def fetch_abi(
     *,
     priority: int = LOW_PRIORITY,
     ignore_negative_cache: bool = False,
+    on_success=None,
 ) -> ABILookupJob:
     chain_id = int(chain_id)
     address = address.lower()
@@ -78,6 +99,8 @@ def fetch_abi(
     with _state_lock:
         existing = _pending.get(key)
         if existing is not None and not existing.done and not ignore_negative_cache:
+            if on_success is not None:
+                existing.add_done_callback(on_success)
             existing.bump_priority(priority)
             return existing
 
@@ -98,6 +121,8 @@ def fetch_abi(
         job = ABILookupJob(
             chain_id, address, ignore_negative_cache=ignore_negative_cache, priority=priority
         )
+        if on_success is not None:
+            job.add_done_callback(on_success)
         _pending[key] = job
         _ensure_worker_started()
 
@@ -183,8 +208,13 @@ def _fetch_abi(chain_id: int, address: str) -> list[dict]:
         if sleep_for > 0:
             time.sleep(sleep_for)
 
-    if errors and all(isinstance(error, ExplorerRateLimited) for error in errors):
-        raise errors[-1]
+    if errors:
+        if all(isinstance(error, ExplorerRateLimited) for error in errors):
+            raise errors[-1]
+
+        non_not_found_errors = [error for error in errors if not isinstance(error, ABINotFound)]
+        if non_not_found_errors:
+            raise non_not_found_errors[-1]
 
     raise ABINotFound(f"ABI not found for {address} on chain {chain_id}")
 

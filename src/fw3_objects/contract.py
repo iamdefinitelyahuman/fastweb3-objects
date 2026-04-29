@@ -64,6 +64,7 @@ class _ContractState:
     abi_job: object | None = None
 
 
+_RESERVED_NAMES = {"abi", "address"}
 _CONTRACT_STATE = weakref.WeakKeyDictionary()
 
 
@@ -77,6 +78,8 @@ def _install_abi(contract: "Contract", abi_list: list[dict]) -> None:
 
     for method_abi in function_abis:
         name = method_abi["name"]
+        if name in _RESERVED_NAMES:
+            raise ValueError(f"Contract ABI may not define reserved attribute {name!r}")
         functions.setdefault(name, []).append(method_abi)
 
     for name, method_abis in functions.items():
@@ -135,6 +138,7 @@ class Contract:
             chain.id,
             str(self.address),
             ignore_negative_cache=refresh_abi is True,
+            on_success=lambda abi_list: cache.set(chain.id, str(self.address), "abi", abi_list),
         )
 
     def __getattr__(self, name: str):
@@ -143,10 +147,11 @@ class Contract:
             raise AttributeError(name)
 
         state.abi_job.bump_priority(HIGH_PRIORITY)
-        abi_list = state.abi_job.wait()
-        state.abi_job = None
+        try:
+            abi_list = state.abi_job.wait()
+        finally:
+            state.abi_job = None
         _install_abi(self, abi_list)
-        AddressMetadataCache().set(state.chain.id, str(self.address), "abi", abi_list)
 
         try:
             return object.__getattribute__(self, name)
