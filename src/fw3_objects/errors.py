@@ -5,6 +5,14 @@ class FW3ObjectsError(Exception):
     pass
 
 
+class ABITypeError(TypeError):
+    pass
+
+
+class ABIValueError(ValueError):
+    pass
+
+
 class ChainMismatch(FW3ObjectsError):
     def __init__(self, active_chain, target_chain, context: str | None = None):
         self.active_chain_id = int(active_chain)

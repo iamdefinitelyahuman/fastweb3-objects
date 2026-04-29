@@ -169,7 +169,6 @@ class _ContractMethod:
         return abi.decode_calldata(self.method_abi, hexstr)
 
     def encode_input(self, *args):
-        # TODO: argument coercion + validation
         return abi.encode_calldata(self.method_abi, args)
 
     def decode_output(self, hexstr: str):
