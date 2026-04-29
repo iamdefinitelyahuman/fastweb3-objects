@@ -50,11 +50,17 @@ class DummyEth:
         return 77
 
 
+class DummyProvider:
+    def add_middleware(self, middleware):
+        pass
+
+
 class DummyWeb3:
     def __init__(self, chain_id: int, **kwargs) -> None:
         self.chain_id = chain_id
         self.kwargs = kwargs
         self.eth = DummyEth()
+        self.provider = DummyProvider()
 
 
 @pytest.fixture(autouse=True)
