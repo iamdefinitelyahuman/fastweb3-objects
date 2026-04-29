@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS rpc_cache (
 _READ = object()
 CacheRule = Callable[[Any, Any], Any | None]
 
+ERC20_METADATA_SELECTORS = {
+    "0x06fdde03",  # name()
+    "0x95d89b41",  # symbol()
+    "0x313ce567",  # decimals()
+}
+
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -42,8 +48,37 @@ def _eth_get_code_cache_params(call, result: Any = _READ) -> Any | None:
     return [address.lower(), "latest"]
 
 
+def _eth_call_cache_params(call, result: Any = _READ) -> Any | None:
+    params = getattr(call, "params", None)
+    if not isinstance(params, (list, tuple)) or len(params) < 2:
+        return None
+
+    tx, block = params[:2]
+    if block != "latest":
+        return None
+
+    if not isinstance(tx, dict):
+        return None
+
+    to = tx.get("to")
+    data = tx.get("data") or tx.get("input")
+
+    if not isinstance(to, str) or not isinstance(data, str):
+        return None
+
+    data = data.lower()
+    if data not in ERC20_METADATA_SELECTORS:
+        return None
+
+    if isinstance(result, Exception):
+        return None
+
+    return [to.lower(), data, "latest"]
+
+
 CACHE_RULES: dict[str, CacheRule] = {
     "eth_getCode": _eth_get_code_cache_params,
+    "eth_call": _eth_call_cache_params,
 }
 
 
