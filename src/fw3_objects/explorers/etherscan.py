@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import json
+
+import httpx
+
+from fw3_objects.errors import ABINotFound, ExplorerError, ExplorerRateLimited
+
+BASE_URL = "https://api.etherscan.io/v2/api"
+RATE_LIMIT_COOLDOWN = 0.5
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    value = response.headers.get("Retry-After")
+    if value is None:
+        return None
+
+    try:
+        return max(float(value), 0.0)
+    except ValueError:
+        return None
+
+
+def get_abi(chain_id: int, address: str, api_key: str) -> list[dict]:
+    params = {
+        "chainid": int(chain_id),
+        "module": "contract",
+        "action": "getabi",
+        "address": address,
+        "apikey": api_key,
+    }
+
+    try:
+        response = httpx.get(BASE_URL, params=params, timeout=10)
+    except httpx.HTTPError as exc:
+        raise ExplorerError(str(exc)) from exc
+
+    if response.status_code == 429:
+        raise ExplorerRateLimited("etherscan", _retry_after(response))
+
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise ExplorerError(str(exc)) from exc
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise ExplorerError("Invalid Etherscan response") from exc
+
+    status = data.get("status")
+    result = data.get("result")
+
+    if status == "0":
+        message = str(data.get("message", ""))
+        if "rate limit" in message.lower():
+            raise ExplorerRateLimited("etherscan", None)
+        raise ABINotFound(str(result or message or "ABI not found"))
+
+    if not result:
+        raise ABINotFound("ABI not found")
+
+    if not isinstance(result, str):
+        raise ExplorerError("Invalid Etherscan ABI response")
+
+    try:
+        parsed = json.loads(result)
+    except ValueError as exc:
+        raise ExplorerError("Invalid Etherscan ABI JSON") from exc
+
+    if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
+        raise ExplorerError("Invalid Etherscan ABI")
+
+    return parsed
