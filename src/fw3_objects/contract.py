@@ -110,7 +110,6 @@ class Contract:
 
         chain = Chain(chain)
         self.address = Account(address, chain=chain)
-        self.abi = []
         _CONTRACT_STATE[self] = _ContractState(chain=chain)
 
         cache = AddressMetadataCache()
