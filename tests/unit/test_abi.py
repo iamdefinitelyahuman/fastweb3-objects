@@ -245,3 +245,102 @@ def test_decode_calldata_rejects_short_data_and_wrong_selector():
 def test_invalid_abi_types_raise_abi_value_error(abi_type):
     with pytest.raises(ABIValueError):
         _encode([{"name": "value", "type": abi_type}], 1)
+
+
+@pytest.mark.parametrize(
+    ("abi_type", "value", "expected"),
+    [
+        ("uint256", "0x01", 1),
+        ("int256", "-0x01", -1),
+        ("int8", "-0x01", -1),
+        ("bytes1", "0x00", b"\x00"),
+        ("bytes32", "0x" + "ff" * 32, b"\xff" * 32),
+    ],
+)
+def test_default_integer_and_fixed_bytes_boundary_happy_paths(abi_type, value, expected):
+    assert _roundtrip([{"name": "value", "type": abi_type}], value) == (expected,)
+
+
+@pytest.mark.parametrize(
+    ("abi_type", "value", "match"),
+    [
+        ("uint0", 1, "Invalid ABI integer size"),
+        ("uint264", 1, "Invalid ABI integer size"),
+        ("uint9", 1, "Invalid ABI integer size"),
+        ("int0", 1, "Invalid ABI integer size"),
+        ("bytes0", b"", "Invalid ABI bytes size"),
+        ("bytes33", b"\x00" * 33, "Invalid ABI bytes size"),
+        ("bytesx", b"\x00", "Invalid ABI bytes type"),
+        ("uint8[2]foo", [1, 2], "Invalid ABI array type"),
+        ("uint8[", [1], "Invalid ABI array type"),
+    ],
+)
+def test_invalid_abi_type_forms_raise_specific_value_errors(abi_type, value, match):
+    with pytest.raises(ABIValueError, match=match):
+        _encode([{"name": "value", "type": abi_type}], value)
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_non_finite_float_integer_values_raise_value_error(value):
+    with pytest.raises(ABIValueError, match="Invalid uint8 value"):
+        _encode([{"name": "value", "type": "uint8"}], value)
+
+
+def test_unsupported_abi_type_raises_value_error():
+    with pytest.raises(ABIValueError, match="Unsupported ABI type"):
+        _encode([{"name": "value", "type": "fixed128x18"}], 1)
+
+
+def test_dynamic_and_fixed_multidimensional_arrays_validate_each_dimension():
+    decoded = _roundtrip([{"name": "values", "type": "uint8[][2]"}], [[1, "2"], ["0x03"]])
+
+    assert _normalized(decoded) == (((1, 2), (3,)),)
+
+    with pytest.raises(ABIValueError, match="Expected array of length 2"):
+        _encode([{"name": "values", "type": "uint8[][2]"}], [[1]])
+
+    with pytest.raises(ABIValueError, match="Expected array of length 2"):
+        _encode([{"name": "values", "type": "uint8[2][]"}], [[1]])
+
+
+def test_tuple_array_rejects_non_sequence_element():
+    input_abi = {
+        "name": "values",
+        "type": "tuple[]",
+        "components": [
+            {"name": "addr", "type": "address"},
+            {"name": "amount", "type": "uint8"},
+        ],
+    }
+
+    with pytest.raises(ABITypeError, match="Expected list or tuple for tuple ABI argument"):
+        _encode([input_abi], [1])
+
+
+def test_encode_decode_accept_hex_strings_without_0x_for_decode_paths():
+    method_abi = _method({"name": "value", "type": "uint8"})
+    calldata = encode_calldata(method_abi, (7,))
+
+    assert decode_calldata(method_abi, calldata.removeprefix("0x")) == (7,)
+
+    from fw3_objects.abi import decode_returndata, encode
+
+    returndata = encode("(uint8)", (7,)).hex()
+    assert decode_returndata({"outputs": [{"name": "value", "type": "uint8"}]}, returndata) == 7
+
+
+def test_function_signature_uses_raw_input_type_strings_for_tuple_inputs():
+    from fw3_objects.abi import function_signature
+
+    method_abi = {
+        "name": "setValues",
+        "inputs": [
+            {
+                "name": "values",
+                "type": "tuple[2][]",
+                "components": [{"name": "value", "type": "uint256"}],
+            }
+        ],
+    }
+
+    assert function_signature(method_abi) == "setValues(tuple[2][])"

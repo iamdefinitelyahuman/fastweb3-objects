@@ -7,6 +7,7 @@ import pytest
 from fw3_objects import abi as abi_module
 from fw3_objects.chain import Chain
 from fw3_objects.contract import Contract, ContractCall, ContractTx, OverloadedMethod, _load_abi
+from fw3_objects.explorers.abi import HIGH_PRIORITY
 
 ADDRESS = "0x" + "11" * 20
 SENDER = "0x" + "22" * 20
@@ -273,3 +274,142 @@ def test_overloaded_method_reports_no_match_and_ambiguous_match(chain) -> None:
         contract.foo[(1,)]
     with pytest.raises(TypeError, match="comma-separated string"):
         contract.foo[1]
+
+
+def test_contract_installs_cached_abi_without_fetching(monkeypatch, chain) -> None:
+    cached_abi = [
+        {
+            "type": "function",
+            "name": "name",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [{"name": "", "type": "string"}],
+        }
+    ]
+
+    class FakeCache:
+        def get(self, chain_id, address, key):
+            assert (chain_id, address, key) == (1, ADDRESS, "abi")
+            return cached_abi
+
+        def set(self, chain_id, address, key, value):
+            raise AssertionError("cached ABI should not be rewritten")
+
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())
+    monkeypatch.setattr(
+        "fw3_objects.contract.fetch_abi",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not fetch")),
+    )
+
+    contract = Contract(ADDRESS, chain=chain)
+
+    assert contract.abi == cached_abi
+    assert isinstance(contract.name, ContractCall)
+
+
+def test_contract_refresh_false_does_not_fetch_missing_abi(monkeypatch, chain) -> None:
+    class FakeCache:
+        def get(self, chain_id, address, key):
+            return None
+
+        def set(self, chain_id, address, key, value):
+            raise AssertionError("missing ABI should not be cached")
+
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())
+    monkeypatch.setattr(
+        "fw3_objects.contract.fetch_abi",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not fetch")),
+    )
+
+    contract = Contract(ADDRESS, chain=chain, refresh_abi=False)
+
+    assert contract.abi == []
+    with pytest.raises(AttributeError):
+        contract.name
+
+
+def test_contract_explicit_abi_cache_write_rules(monkeypatch, chain) -> None:
+    abi = [
+        {
+            "type": "function",
+            "name": "name",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [],
+        }
+    ]
+    writes = []
+
+    class FakeCache:
+        def __init__(self, cached):
+            self.cached = cached
+
+        def get(self, chain_id, address, key):
+            return self.cached
+
+        def set(self, chain_id, address, key, value):
+            writes.append((chain_id, address, key, value))
+
+    cache = FakeCache(cached=None)
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: cache)
+
+    Contract(ADDRESS, abi, chain=chain)
+    assert writes == [(1, ADDRESS, "abi", abi)]
+
+    cache.cached = [{"type": "function", "name": "old", "inputs": [], "outputs": []}]
+    Contract(ADDRESS, abi, chain=chain)
+    assert writes == [(1, ADDRESS, "abi", abi)]
+
+    Contract(ADDRESS, abi, chain=chain, refresh_abi=True)
+    assert writes == [(1, ADDRESS, "abi", abi), (1, ADDRESS, "abi", abi)]
+
+
+def test_contract_async_abi_lookup_caches_on_success_and_installs_on_access(
+    monkeypatch, chain
+) -> None:
+    abi = [
+        {
+            "type": "function",
+            "name": "name",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [],
+        }
+    ]
+    writes = []
+    fetch_calls = []
+
+    class FakeCache:
+        def get(self, chain_id, address, key):
+            return None
+
+        def set(self, chain_id, address, key, value):
+            writes.append((chain_id, address, key, value))
+
+    class FakeJob:
+        def __init__(self):
+            self.priority = None
+
+        def bump_priority(self, priority):
+            self.priority = priority
+
+        def wait(self):
+            return abi
+
+    job = FakeJob()
+
+    def fake_fetch_abi(chain_id, address, **kwargs):
+        fetch_calls.append((chain_id, address, kwargs["ignore_negative_cache"]))
+        kwargs["on_success"](abi)
+        return job
+
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())
+    monkeypatch.setattr("fw3_objects.contract.fetch_abi", fake_fetch_abi)
+
+    contract = Contract(ADDRESS, chain=chain)
+
+    assert fetch_calls == [(1, ADDRESS, False)]
+    assert writes == [(1, ADDRESS, "abi", abi)]
+    assert isinstance(contract.name, ContractCall)
+    assert job.priority == HIGH_PRIORITY
+    assert contract.abi == abi

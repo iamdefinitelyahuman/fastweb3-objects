@@ -112,3 +112,62 @@ def test_rpc_cache_middleware_does_not_store_empty_code_results(db) -> None:
 
     assert merged == ["0x"]
     assert RpcCache(db).get(1, call.method, ["0x" + "33" * 20, "latest"]) is None
+
+
+@pytest.mark.parametrize(
+    "selector",
+    ["0x06fdde03", "0x95d89b41", "0x313ce567"],
+)
+def test_eth_call_cache_params_accepts_erc20_metadata_selectors(selector) -> None:
+    call = DummyCall("eth_call", [{"to": "0x" + "AA" * 20, "data": selector.upper()}, "latest"])
+
+    assert cache_params(call) == ["0x" + "aa" * 20, selector, "latest"]
+    assert cache_params(call, "0x" + "00" * 32) == ["0x" + "aa" * 20, selector, "latest"]
+
+
+def test_eth_call_cache_params_accepts_input_alias() -> None:
+    call = DummyCall("eth_call", [{"to": "0x" + "AA" * 20, "input": "0x95d89b41"}, "latest"])
+
+    assert cache_params(call) == ["0x" + "aa" * 20, "0x95d89b41", "latest"]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        None,
+        [],
+        [{"to": "0x" + "AA" * 20, "data": "0x95d89b41"}],
+        [{"to": "0x" + "AA" * 20, "data": "0x95d89b41"}, "pending"],
+        ["not a tx", "latest"],
+        [{"data": "0x95d89b41"}, "latest"],
+        [{"to": "0x" + "AA" * 20}, "latest"],
+        [{"to": "0x" + "AA" * 20, "data": "0x12345678"}, "latest"],
+    ],
+)
+def test_eth_call_cache_params_rejects_non_metadata_calls(params) -> None:
+    assert cache_params(DummyCall("eth_call", params)) is None
+
+
+def test_eth_call_cache_params_rejects_exception_results() -> None:
+    call = DummyCall("eth_call", [{"to": "0x" + "AA" * 20, "data": "0x95d89b41"}, "latest"])
+
+    assert cache_params(call, RuntimeError("boom")) is None
+
+
+def test_rpc_cache_middleware_caches_erc20_metadata_call_results(db) -> None:
+    call = DummyCall("eth_call", [{"to": "0x" + "AA" * 20, "data": "0x95d89b41"}, "latest"])
+    middleware = RpcCacheMiddleware(1, db)
+    ctx = DummyContext()
+
+    outbound = middleware.before_request(ctx, [call])
+    merged = middleware.after_request(ctx, outbound, ["0x" + "00" * 32])
+
+    assert merged == ["0x" + "00" * 32]
+    assert (
+        RpcCache(db).get(1, "eth_call", ["0x" + "aa" * 20, "0x95d89b41", "latest"])
+        == "0x" + "00" * 32
+    )
+
+    next_ctx = DummyContext()
+    assert middleware.before_request(next_ctx, [call]) == []
+    assert middleware.after_request(next_ctx, [], []) == ["0x" + "00" * 32]
