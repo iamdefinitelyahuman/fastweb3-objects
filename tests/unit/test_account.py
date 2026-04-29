@@ -16,6 +16,8 @@ class DummyEth:
         self.call_calls: list[dict[str, object]] = []
         self.estimate_gas_calls: list[dict[str, object]] = []
         self.send_raw_transaction_calls: list[bytes] = []
+        self.bytecode_calls: list[tuple[str, object]] = []
+        self.storage_calls: list[tuple[str, object, object]] = []
 
     def get_balance(self, address: str, block: object = "latest") -> int:
         self.balance_calls.append((address, block))
@@ -24,6 +26,14 @@ class DummyEth:
     def get_transaction_count(self, address: str, block: object = "latest") -> int:
         self.nonce_calls.append((address, block))
         return 7
+
+    def get_code(self, address: str, block: object = "latest") -> str:
+        self.bytecode_calls.append((address, block))
+        return "0x6000"
+
+    def get_storage_at(self, address: str, position: object, block: object = "latest") -> str:
+        self.storage_calls.append((address, position, block))
+        return "0x" + "00" * 32
 
     def call(self, **kwargs):
         self.call_calls.append(kwargs)
@@ -181,6 +191,22 @@ def test_balance_and_nonce_delegate_to_web3(account, chain) -> None:
     ]
 
 
+def test_bytecode_and_storage_delegate_to_web3(account, chain) -> None:
+    assert account.bytecode() == "0x6000"
+    assert account.bytecode(block_identifier="pending") == "0x6000"
+    assert account.storage(0) == "0x" + "00" * 32
+    assert account.storage("0x01", block_identifier="safe") == "0x" + "00" * 32
+
+    assert chain.w3.eth.bytecode_calls == [
+        (account.address, "latest"),
+        (account.address, "pending"),
+    ]
+    assert chain.w3.eth.storage_calls == [
+        (account.address, 0, "latest"),
+        (account.address, "0x01", "safe"),
+    ]
+
+
 def test_call_omits_none_kwargs(account, chain) -> None:
     result = account.call(to="0x" + "22" * 20, data="0x1234")
 
@@ -306,6 +332,47 @@ def test_transact_uses_explicit_legacy_gas_price(monkeypatch, account, chain) ->
         }
     ]
     assert chain.w3.eth.send_raw_transaction_calls == [b"\xbe\xef"]
+
+
+def test_transact_uses_explicit_eip1559_fee_values(monkeypatch, account, chain) -> None:
+    build_calls: list[dict[str, object]] = []
+
+    def fake_build_transaction_object(**kwargs):
+        build_calls.append(kwargs)
+        return {"tx": "object"}
+
+    class Signed:
+        raw_transaction = b"\xca\xfe"
+
+    monkeypatch.setattr(
+        "fw3_objects.account.build_transaction_object", fake_build_transaction_object
+    )
+    monkeypatch.setattr(account, "sign_transaction", lambda tx: Signed())
+    monkeypatch.setattr(account, "estimate_gas", lambda **kwargs: 21_000)
+
+    txid = account.transact(
+        to="0x" + "22" * 20,
+        max_fee_per_gas=100,
+        max_priority_fee_per_gas=2,
+        nonce=4,
+    )
+
+    assert txid == "0x" + "aa" * 32
+    assert build_calls == [
+        {
+            "from_": account.address,
+            "to": "0x" + "22" * 20,
+            "gas": 21_000,
+            "gas_price": None,
+            "max_fee_per_gas": 100,
+            "max_priority_fee_per_gas": 2,
+            "value": None,
+            "data": None,
+            "nonce": 4,
+            "chain_id": 1,
+        }
+    ]
+    assert chain.w3.eth.send_raw_transaction_calls == [b"\xca\xfe"]
 
 
 def test_transact_rejects_small_gas_buffer(account) -> None:

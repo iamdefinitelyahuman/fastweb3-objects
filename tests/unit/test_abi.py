@@ -185,3 +185,63 @@ def test_tuple_rejects_wrong_length():
 
     with pytest.raises(ABITypeError):
         _encode([input_abi], (ADDRESS,))
+
+
+def test_function_signature_selector_and_tuple_signature():
+    from fw3_objects.abi import function_selector, function_signature
+
+    method_abi = {
+        "name": "setValue",
+        "inputs": [
+            {
+                "name": "value",
+                "type": "tuple",
+                "components": [
+                    {"name": "addr", "type": "address"},
+                    {"name": "amount", "type": "uint256"},
+                ],
+            }
+        ],
+    }
+
+    assert function_signature(method_abi) == "setValue(tuple)"
+    assert function_selector(
+        {
+            "name": "transfer",
+            "inputs": [
+                {"name": "to", "type": "address"},
+                {"name": "amount", "type": "uint256"},
+            ],
+        }
+    ) == bytes.fromhex("a9059cbb")
+
+
+def test_decode_returndata_none_single_and_multiple_values():
+    from fw3_objects.abi import decode_returndata, encode
+
+    assert decode_returndata({"outputs": []}, "0x") is None
+
+    single_outputs = [{"name": "value", "type": "uint256"}]
+    single_data = "0x" + encode("(uint256)", (123,)).hex()
+    assert decode_returndata({"outputs": single_outputs}, single_data) == 123
+
+    multi_outputs = [
+        {"name": "value", "type": "uint256"},
+        {"name": "ok", "type": "bool"},
+    ]
+    multi_data = "0x" + encode("(uint256,bool)", (123, True)).hex()
+    assert decode_returndata({"outputs": multi_outputs}, multi_data) == (123, True)
+
+
+def test_decode_calldata_rejects_short_data_and_wrong_selector():
+    with pytest.raises(ValueError, match="shorter than a function selector"):
+        decode_calldata(_method(), "0x123456")
+
+    with pytest.raises(ValueError, match="does not match"):
+        decode_calldata(_method(), "0x12345678")
+
+
+@pytest.mark.parametrize("abi_type", ["uint7", "bytes33", "uint8[abc]", "fixed128x18"])
+def test_invalid_abi_types_raise_abi_value_error(abi_type):
+    with pytest.raises(ABIValueError):
+        _encode([{"name": "value", "type": abi_type}], 1)
