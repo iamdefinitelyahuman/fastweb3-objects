@@ -10,6 +10,7 @@ from fw3 import Web3
 from fw3.deferred import deferred_response
 from fw3.validation import block_ref, hash32
 
+from .cache.rpc import RpcCacheMiddleware
 from .errors import ChainMismatch
 
 
@@ -274,6 +275,7 @@ class Chain:
         """Create and assign a new ``Web3`` instance for this chain."""
         self._w3_params = dict(w3_params)
         self._w3 = Web3(chain_id=self.id, **self._w3_params)
+        self._w3.provider.add_middleware(RpcCacheMiddleware(self.id))
 
     @classmethod
     def _get_default_chain(cls) -> tuple["Chain | None", bool]:
