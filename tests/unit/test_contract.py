@@ -7,7 +7,7 @@ import pytest
 from fw3_objects import abi as abi_module
 from fw3_objects.chain import Chain
 from fw3_objects.contract import Contract, ContractCall, ContractTx, OverloadedMethod, _load_abi
-from fw3_objects.explorers.abi import HIGH_PRIORITY
+from fw3_objects.explorers.lookup import HIGH_PRIORITY
 
 ADDRESS = "0x" + "11" * 20
 SENDER = "0x" + "22" * 20
@@ -289,8 +289,12 @@ def test_contract_installs_cached_abi_without_fetching(monkeypatch, chain) -> No
 
     class FakeCache:
         def get(self, chain_id, address, key):
-            assert (chain_id, address, key) == (1, ADDRESS, "abi")
-            return cached_abi
+            assert (chain_id, address) == (1, ADDRESS)
+            if key == "abi":
+                return cached_abi
+            if key == "implementation":
+                return None
+            raise AssertionError(f"unexpected cache key: {key}")
 
         def set(self, chain_id, address, key, value):
             raise AssertionError("cached ABI should not be rewritten")
@@ -323,7 +327,8 @@ def test_contract_refresh_false_does_not_fetch_missing_abi(monkeypatch, chain) -
 
     contract = Contract(ADDRESS, chain=chain, refresh_abi=False)
 
-    assert contract.abi == []
+    with pytest.raises(AttributeError):
+        contract.abi
     with pytest.raises(AttributeError):
         contract.name
 
@@ -394,13 +399,13 @@ def test_contract_async_abi_lookup_caches_on_success_and_installs_on_access(
             self.priority = priority
 
         def wait(self):
-            return abi
+            return abi, None
 
     job = FakeJob()
 
     def fake_fetch_abi(chain_id, address, **kwargs):
         fetch_calls.append((chain_id, address, kwargs["ignore_negative_cache"]))
-        kwargs["on_success"](abi)
+        kwargs["on_success"]((abi, None))
         return job
 
     monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())

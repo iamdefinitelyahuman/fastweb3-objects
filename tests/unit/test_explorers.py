@@ -9,8 +9,8 @@ from fw3_objects.errors import (
     ExplorerError,
     ExplorerRateLimited,
 )
-from fw3_objects.explorers import abi as abi_lookup
 from fw3_objects.explorers import blockscout, etherscan
+from fw3_objects.explorers import lookup as abi_lookup
 
 ADDRESS = "0x" + "11" * 20
 ABI = [{"type": "function", "name": "foo", "inputs": [], "outputs": []}]
@@ -43,10 +43,12 @@ def reset_abi_lookup_state(monkeypatch):
     abi_lookup._pending.clear()
     abi_lookup._negative_cache.clear()
     abi_lookup._rate_limited_until.clear()
+    abi_lookup._worker_started = False
     yield
     abi_lookup._pending.clear()
     abi_lookup._negative_cache.clear()
     abi_lookup._rate_limited_until.clear()
+    abi_lookup._worker_started = False
 
 
 def test_etherscan_get_abi_parses_success_response(monkeypatch) -> None:
@@ -54,18 +56,29 @@ def test_etherscan_get_abi_parses_success_response(monkeypatch) -> None:
 
     def fake_get(url, *, params, timeout):
         calls.append((url, params, timeout))
-        return FakeResponse({"status": "1", "result": '[{"type":"function","name":"foo"}]'})
+        return FakeResponse(
+            {
+                "status": "1",
+                "result": [
+                    {
+                        "ABI": '[{"type":"function","name":"foo"}]',
+                        "Proxy": "0",
+                        "Implementation": "",
+                    }
+                ],
+            }
+        )
 
     monkeypatch.setattr(etherscan.httpx, "get", fake_get)
 
-    assert etherscan.get_abi(1, ADDRESS, "key") == [{"type": "function", "name": "foo"}]
+    assert etherscan.get_abi(1, ADDRESS, "key") == ([{"type": "function", "name": "foo"}], None)
     assert calls == [
         (
             etherscan.BASE_URL,
             {
                 "chainid": 1,
                 "module": "contract",
-                "action": "getabi",
+                "action": "getsourcecode",
                 "address": ADDRESS,
                 "apikey": "key",
             },
@@ -123,7 +136,7 @@ def test_etherscan_get_abi_maps_connection_and_invalid_payload(monkeypatch) -> N
     monkeypatch.setattr(
         etherscan.httpx,
         "get",
-        lambda *args, **kwargs: FakeResponse({"status": "1", "result": "not json"}),
+        lambda *args, **kwargs: FakeResponse({"status": "1", "result": [{"ABI": "not json"}]}),
     )
     with pytest.raises(ExplorerError, match="Invalid Etherscan ABI JSON"):
         etherscan.get_abi(1, ADDRESS, "key")
@@ -131,7 +144,7 @@ def test_etherscan_get_abi_maps_connection_and_invalid_payload(monkeypatch) -> N
     monkeypatch.setattr(
         etherscan.httpx,
         "get",
-        lambda *args, **kwargs: FakeResponse({"status": "1", "result": "{}"}),
+        lambda *args, **kwargs: FakeResponse({"status": "1", "result": [{"ABI": "{}"}]}),
     )
     with pytest.raises(ExplorerError, match="Invalid Etherscan ABI"):
         etherscan.get_abi(1, ADDRESS, "key")
@@ -143,33 +156,33 @@ def test_blockscout_get_abi_accepts_string_or_list_result(monkeypatch) -> None:
         "get",
         lambda *args, **kwargs: FakeResponse({"status": "1", "result": '[{"type":"function"}]'}),
     )
-    assert blockscout.get_abi(1, ADDRESS, "key") == [{"type": "function"}]
+    assert blockscout.get_abi(1, ADDRESS, "key") == ([{"type": "function"}], None)
 
     monkeypatch.setattr(
         blockscout.httpx,
         "get",
         lambda *args, **kwargs: FakeResponse({"status": "1", "result": [{"type": "event"}]}),
     )
-    assert blockscout.get_abi(1, ADDRESS, "key") == [{"type": "event"}]
+    assert blockscout.get_abi(1, ADDRESS, "key") == ([{"type": "event"}], None)
 
 
 def test_fetch_abi_uses_configured_providers_and_falls_back(monkeypatch) -> None:
     calls = []
 
-    def etherscan_get_abi(chain_id, address, api_key):
+    def etherscan_get_abi(chain_id, address, api_key, **kwargs):
         calls.append(("etherscan", chain_id, address, api_key))
         raise ABINotFound("not verified")
 
-    def blockscout_get_abi(chain_id, address, api_key):
+    def blockscout_get_abi(chain_id, address, api_key, **kwargs):
         calls.append(("blockscout", chain_id, address, api_key))
-        return ABI
+        return ABI, None
 
     monkeypatch.setenv("ETHERSCAN_TOKEN", "etherscan-key")
     monkeypatch.setenv("BLOCKSCOUT_API_KEY", "blockscout-key")
     monkeypatch.setattr(abi_lookup.etherscan, "get_abi", etherscan_get_abi)
     monkeypatch.setattr(abi_lookup.blockscout, "get_abi", blockscout_get_abi)
 
-    assert abi_lookup._fetch_abi(1, ADDRESS) == ABI
+    assert abi_lookup._fetch_abi(1, ADDRESS) == (ABI, None)
     assert calls == [
         ("etherscan", 1, ADDRESS, "etherscan-key"),
         ("blockscout", 1, ADDRESS, "blockscout-key"),
@@ -183,34 +196,34 @@ def test_fetch_abi_without_api_keys_uses_api_key_name_in_error_message() -> None
 
 def test_run_job_only_negative_caches_not_found_errors(monkeypatch) -> None:
     not_found = abi_lookup.ABILookupJob(1, ADDRESS)
-    abi_lookup._pending[(1, ADDRESS)] = not_found
+    abi_lookup._pending[(1, ADDRESS, True)] = not_found
     monkeypatch.setattr(
         abi_lookup,
         "_fetch_abi",
-        lambda *args: (_ for _ in ()).throw(ABINotFound("nope")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ABINotFound("nope")),
     )
 
     abi_lookup._run_job(not_found)
 
     assert not_found.done
-    assert (1, ADDRESS) in abi_lookup._negative_cache
-    assert (1, ADDRESS) not in abi_lookup._pending
+    assert (1, ADDRESS, True) in abi_lookup._negative_cache
+    assert (1, ADDRESS, True) not in abi_lookup._pending
     with pytest.raises(ABINotFound):
         not_found.wait()
 
     connection_error = abi_lookup.ABILookupJob(1, ADDRESS)
-    abi_lookup._pending[(1, ADDRESS)] = connection_error
+    abi_lookup._pending[(1, ADDRESS, True)] = connection_error
     abi_lookup._negative_cache.clear()
     monkeypatch.setattr(
         abi_lookup,
         "_fetch_abi",
-        lambda *args: (_ for _ in ()).throw(ExplorerConnectionError("offline")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(ExplorerConnectionError("offline")),
     )
 
     abi_lookup._run_job(connection_error)
 
-    assert (1, ADDRESS) not in abi_lookup._negative_cache
-    assert (1, ADDRESS) not in abi_lookup._pending
+    assert (1, ADDRESS, True) not in abi_lookup._negative_cache
+    assert (1, ADDRESS, True) not in abi_lookup._pending
     with pytest.raises(ExplorerConnectionError):
         connection_error.wait()
 
@@ -224,7 +237,7 @@ def test_blockscout_get_abi_sends_expected_request_params(monkeypatch) -> None:
 
     monkeypatch.setattr(blockscout.httpx, "get", fake_get)
 
-    assert blockscout.get_abi("1", ADDRESS, "key") == [{"type": "function", "name": "foo"}]
+    assert blockscout.get_abi("1", ADDRESS, "key") == ([{"type": "function", "name": "foo"}], None)
     assert calls == [
         (
             blockscout.BASE_URL,
@@ -337,14 +350,14 @@ def test_blockscout_accepts_abi_as_json_string_or_list(monkeypatch) -> None:
         "get",
         lambda *args, **kwargs: FakeResponse({"status": "1", "result": '[{"type":"function"}]'}),
     )
-    assert blockscout.get_abi(1, ADDRESS, "key") == [{"type": "function"}]
+    assert blockscout.get_abi(1, ADDRESS, "key") == ([{"type": "function"}], None)
 
     monkeypatch.setattr(
         blockscout.httpx,
         "get",
         lambda *args, **kwargs: FakeResponse({"status": "1", "result": [{"type": "event"}]}),
     )
-    assert blockscout.get_abi(1, ADDRESS, "key") == [{"type": "event"}]
+    assert blockscout.get_abi(1, ADDRESS, "key") == ([{"type": "event"}], None)
 
 
 @pytest.mark.parametrize(
@@ -373,12 +386,12 @@ def test_abi_lookup_job_callbacks_before_and_after_completion() -> None:
     calls = []
 
     job.add_done_callback(calls.append)
-    job.set_result(ABI)
+    job.set_result((ABI, None))
     job.add_done_callback(calls.append)
 
-    assert calls == [ABI, ABI]
+    assert calls == [(ABI, None), (ABI, None)]
     assert job.done
-    assert job.wait() == ABI
+    assert job.wait() == (ABI, None)
 
 
 def test_abi_lookup_job_ignores_callback_exceptions() -> None:
@@ -390,10 +403,10 @@ def test_abi_lookup_job_ignores_callback_exceptions() -> None:
         raise RuntimeError("boom")
 
     job.add_done_callback(broken_callback)
-    job.set_result(ABI)
+    job.set_result((ABI, None))
 
     assert calls == ["called"]
-    assert job.wait() == ABI
+    assert job.wait() == (ABI, None)
 
 
 def test_abi_lookup_job_set_error_clears_callbacks_and_wait_raises() -> None:
@@ -422,7 +435,7 @@ def test_abi_lookup_job_bump_priority_requeues_only_when_priority_improves(monke
     assert job.priority == abi_lookup.HIGH_PRIORITY
     assert enqueued == [job]
 
-    job.set_result(ABI)
+    job.set_result((ABI, None))
     job.bump_priority(-1)
     assert enqueued == [job]
 
@@ -445,8 +458,8 @@ def test_fetch_abi_reuses_pending_job_adds_callback_and_bumps_priority(monkeypat
     assert first.priority == abi_lookup.HIGH_PRIORITY
     assert enqueued == [first, first]
 
-    first.set_result(ABI)
-    assert callbacks == [ABI]
+    first.set_result((ABI, None))
+    assert callbacks == [(ABI, None)]
 
 
 def test_fetch_abi_ignore_negative_cache_creates_separate_pending_job(monkeypatch) -> None:
@@ -459,13 +472,13 @@ def test_fetch_abi_ignore_negative_cache_creates_separate_pending_job(monkeypatc
 
     assert second is not first
     assert second.ignore_negative_cache
-    assert abi_lookup._pending[(1, ADDRESS)] is second
+    assert abi_lookup._pending[(1, ADDRESS, True)] is second
     assert enqueued == [first, second]
 
 
 def test_fetch_abi_returns_failed_job_for_live_negative_cache(monkeypatch) -> None:
     monkeypatch.setattr(abi_lookup.time, "monotonic", lambda: 10.0)
-    abi_lookup._negative_cache[(1, ADDRESS)] = 20.0
+    abi_lookup._negative_cache[(1, ADDRESS, True)] = 20.0
 
     job = abi_lookup.fetch_abi(1, ADDRESS)
 
@@ -479,12 +492,12 @@ def test_fetch_abi_expires_stale_negative_cache_and_enqueues(monkeypatch) -> Non
     monkeypatch.setattr(abi_lookup.time, "monotonic", lambda: 30.0)
     monkeypatch.setattr(abi_lookup, "_ensure_worker_started", lambda: None)
     monkeypatch.setattr(abi_lookup, "_enqueue", enqueued.append)
-    abi_lookup._negative_cache[(1, ADDRESS)] = 20.0
+    abi_lookup._negative_cache[(1, ADDRESS, True)] = 20.0
 
     job = abi_lookup.fetch_abi(1, ADDRESS)
 
-    assert job is abi_lookup._pending[(1, ADDRESS)]
-    assert (1, ADDRESS) not in abi_lookup._negative_cache
+    assert job is abi_lookup._pending[(1, ADDRESS, True)]
+    assert (1, ADDRESS, True) not in abi_lookup._negative_cache
     assert enqueued == [job]
 
 
@@ -519,7 +532,7 @@ def test_enqueue_orders_by_priority_then_sequence() -> None:
 
 def test_worker_skips_done_and_stale_priority_jobs(monkeypatch) -> None:
     done_job = abi_lookup.ABILookupJob(1, ADDRESS)
-    done_job.set_result(ABI)
+    done_job.set_result((ABI, None))
     stale_job = abi_lookup.ABILookupJob(1, "0x" + "22" * 20, priority=abi_lookup.HIGH_PRIORITY)
     calls = []
 
@@ -567,32 +580,32 @@ def test_worker_runs_current_pending_job(monkeypatch) -> None:
 
 def test_run_job_sets_result_removes_pending_and_does_not_negative_cache(monkeypatch) -> None:
     job = abi_lookup.ABILookupJob(1, ADDRESS)
-    abi_lookup._pending[(1, ADDRESS)] = job
-    monkeypatch.setattr(abi_lookup, "_fetch_abi", lambda chain_id, address: ABI)
+    abi_lookup._pending[(1, ADDRESS, True)] = job
+    monkeypatch.setattr(abi_lookup, "_fetch_abi", lambda chain_id, address, **kwargs: (ABI, None))
 
     abi_lookup._run_job(job)
 
     assert job.done
-    assert job.wait() == ABI
-    assert (1, ADDRESS) not in abi_lookup._pending
-    assert (1, ADDRESS) not in abi_lookup._negative_cache
+    assert job.wait() == (ABI, None)
+    assert (1, ADDRESS, True) not in abi_lookup._pending
+    assert (1, ADDRESS, True) not in abi_lookup._negative_cache
 
 
 def test_run_job_negative_caches_abi_not_found_errors(monkeypatch) -> None:
     job = abi_lookup.ABILookupJob(1, ADDRESS)
-    abi_lookup._pending[(1, ADDRESS)] = job
+    abi_lookup._pending[(1, ADDRESS, True)] = job
     monkeypatch.setattr(abi_lookup.time, "monotonic", lambda: 100.0)
     monkeypatch.setattr(
         abi_lookup,
         "_fetch_abi",
-        lambda chain_id, address: (_ for _ in ()).throw(ABINotFound("missing")),
+        lambda chain_id, address, **kwargs: (_ for _ in ()).throw(ABINotFound("missing")),
     )
 
     abi_lookup._run_job(job)
 
     assert job.done
-    assert abi_lookup._negative_cache[(1, ADDRESS)] == 100.0 + abi_lookup.NEGATIVE_ABI_TTL
-    assert (1, ADDRESS) not in abi_lookup._pending
+    assert abi_lookup._negative_cache[(1, ADDRESS, True)] == 100.0 + abi_lookup.NEGATIVE_ABI_TTL
+    assert (1, ADDRESS, True) not in abi_lookup._pending
     with pytest.raises(ABINotFound, match="missing"):
         job.wait()
 
@@ -603,10 +616,10 @@ def test_run_job_does_not_negative_cache_ignored_or_non_pending_jobs(monkeypatch
     monkeypatch.setattr(
         abi_lookup,
         "_fetch_abi",
-        lambda chain_id, address: (_ for _ in ()).throw(ABINotFound("missing")),
+        lambda chain_id, address, **kwargs: (_ for _ in ()).throw(ABINotFound("missing")),
     )
 
-    abi_lookup._pending[(1, ADDRESS)] = ignored
+    abi_lookup._pending[(1, ADDRESS, True)] = ignored
     abi_lookup._run_job(ignored)
     abi_lookup._run_job(non_pending)
 
@@ -615,11 +628,13 @@ def test_run_job_does_not_negative_cache_ignored_or_non_pending_jobs(monkeypatch
 
 def test_run_job_does_not_negative_cache_connection_errors(monkeypatch) -> None:
     job = abi_lookup.ABILookupJob(1, ADDRESS)
-    abi_lookup._pending[(1, ADDRESS)] = job
+    abi_lookup._pending[(1, ADDRESS, True)] = job
     monkeypatch.setattr(
         abi_lookup,
         "_fetch_abi",
-        lambda chain_id, address: (_ for _ in ()).throw(ExplorerConnectionError("offline")),
+        lambda chain_id, address, **kwargs: (_ for _ in ()).throw(
+            ExplorerConnectionError("offline")
+        ),
     )
 
     abi_lookup._run_job(job)
@@ -675,20 +690,20 @@ def test_fetch_abi_without_providers_raises_key_configuration_error() -> None:
 def test_fetch_abi_returns_first_successful_provider(monkeypatch) -> None:
     calls = []
 
-    def etherscan_get_abi(chain_id, address, api_key):
+    def etherscan_get_abi(chain_id, address, api_key, **kwargs):
         calls.append(("etherscan", chain_id, address, api_key))
         raise ABINotFound("not verified")
 
-    def blockscout_get_abi(chain_id, address, api_key):
+    def blockscout_get_abi(chain_id, address, api_key, **kwargs):
         calls.append(("blockscout", chain_id, address, api_key))
-        return ABI
+        return ABI, None
 
     monkeypatch.setenv("ETHERSCAN_TOKEN", "etherscan-key")
     monkeypatch.setenv("BLOCKSCOUT_API_KEY", "blockscout-key")
     monkeypatch.setattr(abi_lookup.etherscan, "get_abi", etherscan_get_abi)
     monkeypatch.setattr(abi_lookup.blockscout, "get_abi", blockscout_get_abi)
 
-    assert abi_lookup._fetch_abi(1, ADDRESS) == ABI
+    assert abi_lookup._fetch_abi(1, ADDRESS) == (ABI, None)
     assert calls == [
         ("etherscan", 1, ADDRESS, "etherscan-key"),
         ("blockscout", 1, ADDRESS, "blockscout-key"),
@@ -696,10 +711,10 @@ def test_fetch_abi_returns_first_successful_provider(monkeypatch) -> None:
 
 
 def test_fetch_abi_raises_last_rate_limit_when_all_providers_rate_limited(monkeypatch) -> None:
-    def etherscan_get_abi(chain_id, address, api_key):
+    def etherscan_get_abi(chain_id, address, api_key, **kwargs):
         raise ExplorerRateLimited("etherscan", 1)
 
-    def blockscout_get_abi(chain_id, address, api_key):
+    def blockscout_get_abi(chain_id, address, api_key, **kwargs):
         raise ExplorerRateLimited("blockscout", 2)
 
     monkeypatch.setenv("ETHERSCAN_API_KEY", "etherscan-key")
@@ -718,7 +733,7 @@ def test_fetch_abi_uses_provider_cooldown_when_rate_limit_has_no_retry_after(mon
     monotonic_values = iter([100.0, 100.0, 100.0, 100.1, 100.2])
     sleeps = []
 
-    def etherscan_get_abi(chain_id, address, api_key):
+    def etherscan_get_abi(chain_id, address, api_key, **kwargs):
         raise ExplorerRateLimited("etherscan", None)
 
     monkeypatch.setenv("ETHERSCAN_API_KEY", "etherscan-key")
@@ -734,10 +749,10 @@ def test_fetch_abi_uses_provider_cooldown_when_rate_limit_has_no_retry_after(mon
 
 
 def test_fetch_abi_raises_last_non_not_found_error(monkeypatch) -> None:
-    def etherscan_get_abi(chain_id, address, api_key):
+    def etherscan_get_abi(chain_id, address, api_key, **kwargs):
         raise ABINotFound("not verified")
 
-    def blockscout_get_abi(chain_id, address, api_key):
+    def blockscout_get_abi(chain_id, address, api_key, **kwargs):
         raise ExplorerError("bad response")
 
     monkeypatch.setenv("ETHERSCAN_API_KEY", "etherscan-key")
@@ -754,7 +769,9 @@ def test_fetch_abi_raises_generic_not_found_when_all_providers_not_found(monkeyp
     monkeypatch.setattr(
         abi_lookup.etherscan,
         "get_abi",
-        lambda chain_id, address, api_key: (_ for _ in ()).throw(ABINotFound("not verified")),
+        lambda chain_id, address, api_key, **kwargs: (_ for _ in ()).throw(
+            ABINotFound("not verified")
+        ),
     )
 
     with pytest.raises(ABINotFound, match=f"ABI not found for {ADDRESS} on chain 1"):
