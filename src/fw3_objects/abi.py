@@ -101,6 +101,10 @@ def _coerce_tuple(item: dict, value):
 
 def _coerce_address(value) -> str:
     from .account import Account
+    from .contract import Contract
+
+    if isinstance(value, Contract):
+        value = value.address.address
 
     if isinstance(value, Account):
         value = value.address
