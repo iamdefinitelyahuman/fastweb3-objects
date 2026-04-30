@@ -165,6 +165,48 @@ class Contract:
         implementation: Account | str | bool | None = None,
         refresh_abi: bool | None = None,
     ):
+        """Create a contract bound to an address with optional ABI resolution.
+
+        Calls always execute against ``address``. The ABI used for method dispatch
+        may come from multiple sources depending on the inputs:
+
+        - If ``abi`` is provided:
+            The ABI is trusted as complete. No explorer lookup or proxy handling
+            is performed. If ``refresh_abi`` is ``True``, the ABI is written to
+            cache. If ``refresh_abi`` is ``None``, it is cached only if no ABI is
+            already stored.
+
+        - If ``implementation`` is an address:
+            The ABI is taken from that implementation. If a proxy ABI exists at
+            ``address``, it is overlaid on top so proxy selectors take precedence.
+
+        - If ``implementation`` is ``False``:
+            Proxy handling is disabled. The ABI is loaded only for ``address``.
+
+        - Otherwise (default):
+            The ABI is loaded from cache or fetched from an explorer. If the
+            contract is identified as a proxy, the implementation ABI is used and
+            overlaid with the proxy ABI.
+
+        Explorer lookups are asynchronous. The constructor returns immediately,
+        and the ABI is installed on first access. Until then, the ``abi``
+        attribute is not present.
+
+        Args:
+            address: Contract address to execute calls against.
+            abi: ABI list or path to a JSON ABI file. Bypasses all lookup logic.
+            chain: Chain or chain id. Uses the active default chain if omitted.
+            implementation: Proxy override. Address = force implementation,
+                ``False`` = ignore proxy, ``None`` = auto.
+            refresh_abi: Cache control. ``True`` forces refresh, ``False`` uses
+                cache only, ``None`` uses cache then falls back to explorer.
+
+        Raises:
+            NoActiveChain: If no chain is available.
+            FileNotFoundError: If ``abi`` path does not exist.
+            TypeError: If ``abi`` is invalid.
+            ValueError: If ABI format is invalid.
+        """
         if chain is None:
             chain, _ = Chain._get_default_chain()
             if chain is None:
