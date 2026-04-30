@@ -10,7 +10,7 @@ from .account import Account
 from .cache.metadata import AddressMetadataCache
 from .chain import Chain
 from .errors import ABINotFound, NoActiveChain
-from .explorers.abi import HIGH_PRIORITY, fetch_abi
+from .explorers.lookup import HIGH_PRIORITY, fetch_abi
 
 
 def _load_abi(abi):
