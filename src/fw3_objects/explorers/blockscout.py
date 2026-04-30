@@ -26,7 +26,9 @@ def _retry_after(response: httpx.Response) -> float | None:
         return None
 
 
-def get_abi(chain_id: int, address: str, api_key: str) -> list[dict]:
+def get_abi(
+    chain_id: int, address: str, api_key: str, *, resolve_proxy: bool = True
+) -> tuple[list[dict], str | None]:
     params = {
         "chain_id": int(chain_id),
         "module": "contract",
@@ -76,4 +78,4 @@ def get_abi(chain_id: int, address: str, api_key: str) -> list[dict]:
     if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
         raise ExplorerError("Invalid Blockscout ABI")
 
-    return parsed
+    return parsed, None

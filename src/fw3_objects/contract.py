@@ -9,7 +9,7 @@ from . import abi
 from .account import Account
 from .cache.metadata import AddressMetadataCache
 from .chain import Chain
-from .errors import NoActiveChain
+from .errors import ABINotFound, NoActiveChain
 from .explorers.abi import HIGH_PRIORITY, fetch_abi
 
 
@@ -62,6 +62,10 @@ def _method_class(method_abi: dict) -> type["_ContractMethod"]:
 class _ContractState:
     chain: Chain
     abi_job: object | None = None
+    proxy_abi: list[dict] | None = None
+    implementation: str | None = None
+    implementation_contract: object | None = None
+    refresh_abi: bool | None = None
 
 
 _RESERVED_NAMES = {"abi", "address"}
@@ -95,12 +99,70 @@ def _install_abi(contract: "Contract", abi_list: list[dict]) -> None:
         setattr(contract, name, method)
 
 
+def _cache_abi_result(cache, chain_id: int, address: str, result) -> None:
+    abi_list, implementation = result
+    cache.set(chain_id, address, "abi", abi_list)
+    if implementation is not None:
+        cache.set(chain_id, address, "implementation", implementation)
+
+
+def _normalize_implementation(implementation, chain: Chain) -> str | None:
+    if implementation is None or implementation is False:
+        return None
+    return str(Account(implementation, chain=chain))
+
+
+def _start_implementation_lookup(contract: "Contract", refresh_abi: bool | None) -> None:
+    state = _CONTRACT_STATE[contract]
+    if state.implementation is None or state.implementation_contract is not None:
+        return
+    state.implementation_contract = Contract(
+        state.implementation,
+        chain=state.chain,
+        refresh_abi=refresh_abi,
+    )
+
+
+def _resolve_abi(contract: "Contract") -> None:
+    state = _CONTRACT_STATE[contract]
+
+    if state.proxy_abi is None:
+        if state.abi_job is None:
+            raise AttributeError("abi")
+
+        state.abi_job.bump_priority(HIGH_PRIORITY)
+        try:
+            result = state.abi_job.wait()
+        except ABINotFound:
+            if state.implementation is None:
+                raise
+            state.proxy_abi = []
+        else:
+            proxy_abi, implementation = result
+            state.proxy_abi = proxy_abi
+            if state.implementation is None:
+                state.implementation = implementation
+        finally:
+            state.abi_job = None
+
+        _start_implementation_lookup(contract, state.refresh_abi)
+
+    if state.implementation is None:
+        _install_abi(contract, state.proxy_abi)
+        return
+
+    _start_implementation_lookup(contract, state.refresh_abi)
+    implementation_abi = state.implementation_contract.abi
+    _install_abi(contract, abi.overlay_abi(implementation_abi, state.proxy_abi))
+
+
 class Contract:
     def __init__(
         self,
         address: Account | str,
         abi: list | str | Path | None = None,
         chain: Chain | int | None = None,
+        implementation: Account | str | bool | None = None,
         refresh_abi: bool | None = None,
     ):
         if chain is None:
@@ -110,7 +172,7 @@ class Contract:
 
         chain = Chain(chain)
         self.address = Account(address, chain=chain)
-        _CONTRACT_STATE[self] = _ContractState(chain=chain)
+        _CONTRACT_STATE[self] = _ContractState(chain=chain, refresh_abi=refresh_abi)
 
         cache = AddressMetadataCache()
 
@@ -124,33 +186,54 @@ class Contract:
                 cache.set(chain.id, str(self.address), "abi", abi_list)
             return
 
+        state = _CONTRACT_STATE[self]
+        forced_implementation = _normalize_implementation(implementation, chain)
+        resolve_proxy = implementation is None
+
         if refresh_abi is not True:
             cached_abi = cache.get(chain.id, str(self.address), "abi")
+            cached_implementation = forced_implementation
+            if cached_implementation is None and implementation is None:
+                cached_implementation = cache.get(chain.id, str(self.address), "implementation")
+
             if cached_abi is not None:
-                _install_abi(self, _load_abi(cached_abi))
+                if cached_implementation is None:
+                    _install_abi(self, _load_abi(cached_abi))
+                    return
+
+                state.proxy_abi = _load_abi(cached_abi)
+                state.implementation = cached_implementation
+                _start_implementation_lookup(self, refresh_abi)
                 return
 
             if refresh_abi is False:
                 return
 
-        _CONTRACT_STATE[self].abi_job = fetch_abi(
+        state.implementation = forced_implementation
+        if state.implementation is not None:
+            _start_implementation_lookup(self, refresh_abi)
+
+        def on_success(result):
+            _cache_abi_result(cache, chain.id, str(self.address), result)
+            _, implementation = result
+            if state.implementation is None and implementation is not None:
+                state.implementation = implementation
+                _start_implementation_lookup(self, refresh_abi)
+
+        state.abi_job = fetch_abi(
             chain.id,
             str(self.address),
             ignore_negative_cache=refresh_abi is True,
-            on_success=lambda abi_list: cache.set(chain.id, str(self.address), "abi", abi_list),
+            resolve_proxy=resolve_proxy,
+            on_success=on_success,
         )
 
     def __getattr__(self, name: str):
         state = _CONTRACT_STATE[self]
-        if state.abi_job is None:
+        if state.abi_job is None and state.proxy_abi is None:
             raise AttributeError(name)
 
-        state.abi_job.bump_priority(HIGH_PRIORITY)
-        try:
-            abi_list = state.abi_job.wait()
-        finally:
-            state.abi_job = None
-        _install_abi(self, abi_list)
+        _resolve_abi(self)
 
         try:
             return object.__getattribute__(self, name)

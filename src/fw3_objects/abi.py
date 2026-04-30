@@ -249,6 +249,25 @@ def function_selector(method_abi: dict) -> bytes:
     return k.digest()[:4]
 
 
+def overlay_abi(implementation_abi: list[dict], proxy_abi: list[dict]) -> list[dict]:
+    items = []
+    functions = {}
+
+    for item in [*implementation_abi, *proxy_abi]:
+        if item.get("type", "function") != "function":
+            items.append(item)
+            continue
+
+        selector = function_selector(item)
+        if selector in functions:
+            items[functions[selector]] = item
+        else:
+            functions[selector] = len(items)
+            items.append(item)
+
+    return items
+
+
 def decode_calldata(method_abi: dict, hexstr: str):
     data = bytes.fromhex(hexstr.removeprefix("0x"))
 

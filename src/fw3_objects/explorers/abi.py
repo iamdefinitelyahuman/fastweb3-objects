@@ -21,10 +21,11 @@ class ABILookupJob:
     chain_id: int
     address: str
     ignore_negative_cache: bool = False
+    resolve_proxy: bool = True
     priority: int = LOW_PRIORITY
     _event: threading.Event = field(default_factory=threading.Event, init=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, init=False)
-    _abi: list[dict] | None = field(default=None, init=False)
+    _result: tuple[list[dict], str | None] | None = field(default=None, init=False)
     _error: BaseException | None = field(default=None, init=False)
     _callbacks: list = field(default_factory=list, init=False)
 
@@ -33,10 +34,10 @@ class ABILookupJob:
             if not self._event.is_set():
                 self._callbacks.append(callback)
                 return
-            abi = self._abi
+            result = self._result
 
-        if abi is not None:
-            callback(abi)
+        if result is not None:
+            callback(result)
 
     def bump_priority(self, priority: int) -> None:
         with self._lock:
@@ -45,22 +46,22 @@ class ABILookupJob:
             self.priority = priority
         _enqueue(self)
 
-    def wait(self) -> list[dict]:
+    def wait(self) -> tuple[list[dict], str | None]:
         self._event.wait()
         if self._error is not None:
             raise self._error
-        return self._abi
+        return self._result
 
-    def set_result(self, abi: list[dict]) -> None:
+    def set_result(self, result: tuple[list[dict], str | None]) -> None:
         with self._lock:
-            self._abi = abi
+            self._result = result
             callbacks = tuple(self._callbacks)
             self._callbacks.clear()
             self._event.set()
 
         for callback in callbacks:
             try:
-                callback(abi)
+                callback(result)
             except Exception:
                 pass
 
@@ -77,8 +78,8 @@ class ABILookupJob:
 
 _sequence = itertools.count()
 _queue: queue.PriorityQueue[tuple[int, int, ABILookupJob]] = queue.PriorityQueue()
-_pending: dict[tuple[int, str], ABILookupJob] = {}
-_negative_cache: dict[tuple[int, str], float] = {}
+_pending: dict[tuple[int, str, bool], ABILookupJob] = {}
+_negative_cache: dict[tuple[int, str, bool], float] = {}
 _rate_limited_until: dict[str, float] = {}
 _state_lock = threading.RLock()
 _worker_started = False
@@ -90,11 +91,12 @@ def fetch_abi(
     *,
     priority: int = LOW_PRIORITY,
     ignore_negative_cache: bool = False,
+    resolve_proxy: bool = True,
     on_success=None,
 ) -> ABILookupJob:
     chain_id = int(chain_id)
     address = address.lower()
-    key = (chain_id, address)
+    key = (chain_id, address, resolve_proxy)
 
     with _state_lock:
         existing = _pending.get(key)
@@ -111,6 +113,7 @@ def fetch_abi(
                     chain_id,
                     address,
                     ignore_negative_cache=ignore_negative_cache,
+                    resolve_proxy=resolve_proxy,
                     priority=priority,
                 )
                 job.set_error(ABINotFound(f"ABI not found for {address} on chain {chain_id}"))
@@ -119,7 +122,11 @@ def fetch_abi(
                 _negative_cache.pop(key, None)
 
         job = ABILookupJob(
-            chain_id, address, ignore_negative_cache=ignore_negative_cache, priority=priority
+            chain_id,
+            address,
+            ignore_negative_cache=ignore_negative_cache,
+            resolve_proxy=resolve_proxy,
+            priority=priority,
         )
         if on_success is not None:
             job.add_done_callback(on_success)
@@ -157,10 +164,10 @@ def _worker() -> None:
 
 
 def _run_job(job: ABILookupJob) -> None:
-    key = (job.chain_id, job.address)
+    key = (job.chain_id, job.address, job.resolve_proxy)
 
     try:
-        abi = _fetch_abi(job.chain_id, job.address)
+        result = _fetch_abi(job.chain_id, job.address, resolve_proxy=job.resolve_proxy)
     except BaseException as exc:
         job.set_error(exc)
         with _state_lock:
@@ -168,14 +175,16 @@ def _run_job(job: ABILookupJob) -> None:
             if should_cache and not job.ignore_negative_cache and isinstance(exc, ABINotFound):
                 _negative_cache[key] = time.monotonic() + NEGATIVE_ABI_TTL
     else:
-        job.set_result(abi)
+        job.set_result(result)
     finally:
         with _state_lock:
             if _pending.get(key) is job:
                 _pending.pop(key, None)
 
 
-def _fetch_abi(chain_id: int, address: str) -> list[dict]:
+def _fetch_abi(
+    chain_id: int, address: str, *, resolve_proxy: bool = True
+) -> tuple[list[dict], str | None]:
     providers = _providers()
     if not providers:
         raise ABINotFound(
@@ -189,7 +198,7 @@ def _fetch_abi(chain_id: int, address: str) -> list[dict]:
 
         for name, func, api_key, cooldown in ready:
             try:
-                return func(chain_id, address, api_key)
+                return func(chain_id, address, api_key, resolve_proxy=resolve_proxy)
             except ExplorerRateLimited as exc:
                 retry_after = exc.retry_after if exc.retry_after is not None else cooldown
                 with _state_lock:

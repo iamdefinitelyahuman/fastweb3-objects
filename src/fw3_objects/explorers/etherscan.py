@@ -26,11 +26,28 @@ def _retry_after(response: httpx.Response) -> float | None:
         return None
 
 
-def get_abi(chain_id: int, address: str, api_key: str) -> list[dict]:
+def _parse_abi(result) -> list[dict]:
+    if not isinstance(result, str):
+        raise ExplorerError("Invalid Etherscan ABI response")
+
+    try:
+        parsed = json.loads(result)
+    except ValueError as exc:
+        raise ExplorerError("Invalid Etherscan ABI JSON") from exc
+
+    if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
+        raise ExplorerError("Invalid Etherscan ABI")
+
+    return parsed
+
+
+def get_abi(
+    chain_id: int, address: str, api_key: str, *, resolve_proxy: bool = True
+) -> tuple[list[dict], str | None]:
     params = {
         "chainid": int(chain_id),
         "module": "contract",
-        "action": "getabi",
+        "action": "getsourcecode",
         "address": address,
         "apikey": api_key,
     }
@@ -62,18 +79,16 @@ def get_abi(chain_id: int, address: str, api_key: str) -> list[dict]:
             raise ExplorerRateLimited("etherscan", None)
         raise ABINotFound(str(result or message or "ABI not found"))
 
-    if not result:
+    if not isinstance(result, list) or not result:
         raise ABINotFound("ABI not found")
 
-    if not isinstance(result, str):
-        raise ExplorerError("Invalid Etherscan ABI response")
+    item = result[0]
+    if not isinstance(item, dict):
+        raise ExplorerError("Invalid Etherscan source response")
 
-    try:
-        parsed = json.loads(result)
-    except ValueError as exc:
-        raise ExplorerError("Invalid Etherscan ABI JSON") from exc
+    abi = _parse_abi(item.get("ABI"))
+    implementation = item.get("Implementation")
+    if not resolve_proxy or item.get("Proxy") != "1" or not implementation:
+        implementation = None
 
-    if not isinstance(parsed, list) or not all(isinstance(item, dict) for item in parsed):
-        raise ExplorerError("Invalid Etherscan ABI")
-
-    return parsed
+    return abi, implementation
