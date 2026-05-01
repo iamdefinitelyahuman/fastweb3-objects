@@ -5,7 +5,7 @@ from threading import Event
 
 from .account import Account
 from .chain import Chain
-from .errors import TransactionNotFound
+from .errors import NoActiveChain, TransactionNotFound
 
 
 def tx_property(fn):
@@ -26,7 +26,12 @@ class TxStatus(IntEnum):
 
 
 class Transaction:
-    def __init__(self, hash, chain, *, allow_unseen=False, _txdict=None):
+    def __init__(self, hash, chain=None, *, allow_unseen=False, _txdict=None):
+        if chain is None:
+            chain, _ = Chain._get_default_chain()
+            if chain is None:
+                raise NoActiveChain("No chain specified for Transaction")
+
         self.hash = hash
         self.chain = Chain(chain)
 
