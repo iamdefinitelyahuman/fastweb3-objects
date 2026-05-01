@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import IntEnum
 from threading import Event
 
 from .account import Account
@@ -14,6 +15,15 @@ def tx_property(fn):
     return property(wrapper)
 
 
+class TxStatus(IntEnum):
+    CONFIRMED = 1
+    REVERTED = 0
+    PENDING = -1
+    DROPPED = -2
+    REPLACED = -3
+    UNSEEN = -4
+
+
 class Transaction:
     def __init__(self, hash, chain, txdict=None):
         self.hash = hash
@@ -22,6 +32,7 @@ class Transaction:
         self._transaction = txdict or {}
         self._receipt = {}
         self._initialized = Event()
+        self._status = TxStatus(-4)
 
         if txdict:
             self._initialized.set()
@@ -93,8 +104,10 @@ class Transaction:
 
     @tx_property
     def status(self):
-        # TODO make more robust, indicate pending / dropped / replaced
-        return self._receipt.get("status")
+        status = self._receipt.get("status")
+        if status is not None:
+            return TxStatus(status)
+        return self._status
 
     @tx_property
     def gas_used(self):
