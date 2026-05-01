@@ -51,7 +51,7 @@ class TransactionMonitor:
 
     def _poll_batch(self, watched):
         w3 = self.chain.w3
-        known = [tx for tx in watched if _has_sender_and_nonce(tx)]
+        known = [tx for tx in watched if tx._transaction.get("from")]
         senders = {tx._transaction["from"] for tx in known}
 
         with w3.batch_requests():
@@ -61,53 +61,50 @@ class TransactionMonitor:
                 sender: w3.eth.get_transaction_count(sender, "latest") for sender in senders
             }
 
-        remove = set()
-
         for tx in watched:
             txdict = tx_data[tx]
             receipt = receipts[tx]
-            tx._error = None
 
             if receipt is not None:
+                # receipt is available, transaction has confirmed.
                 if txdict is not None:
                     tx._transaction = txdict
                 tx._receipt = receipt
-                tx._initialized.set()
-                remove.add(tx)
-                continue
+                tx._finalized.set()
 
-            if txdict is not None:
+            elif txdict is not None:
+                # receipt not available, but transaction is. the transaction
+                # is currently sitting in a the public mempool.
                 tx._transaction = txdict
                 tx._status = TxStatus.PENDING
-                tx._initialized.set()
-                continue
 
-            if tx._status == TxStatus.UNSEEN and not tx._allow_unseen:
-                tx._initialized.set()
-                remove.add(tx)
-                continue
-
-            if _has_sender_and_nonce(tx):
-                sender = tx._transaction["from"]
-                nonce = tx._transaction["nonce"]
-                if latest_nonces.get(sender, 0) > nonce:
+            else:
+                # receipt and transaction are both unavailable from node
+                sender = tx._transaction.get("from")
+                if sender and latest_nonces.get(sender, 0) > tx._transaction["nonce"]:
+                    # we know the sender and nonce, because the transaction was either
+                    # previously seen publicly or seeded locally. the sender's nonce has
+                    # advanced beyond the nonce of this transaction, but the transaction
+                    # did not confirm. finalize as replaced by another transaction.
                     tx._status = TxStatus.REPLACED
-                    tx._initialized.set()
-                    remove.add(tx)
-                    continue
-
-            if tx._status != TxStatus.UNSEEN:
-                tx._status = TxStatus.DROPPED
+                    tx._finalized.set()
+                elif tx._status != TxStatus.UNSEEN:
+                    # transaction was previously seen, but we cannot say for sure
+                    # that it was replaced - only that it is no longer available from
+                    # the node. mark it as dropped.
+                    tx._status = TxStatus.DROPPED
+                elif not tx._allow_unseen:
+                    # transaction was never seen and caller did not ask us to keep
+                    # watching unseen hashes. finalize as not found.
+                    tx._finalized.set()
 
             tx._initialized.set()
+
+        remove = {i for i in watched if i._finalized.is_set()}
 
         if remove:
             with self._lock:
                 self._watched.difference_update(remove)
-
-
-def _has_sender_and_nonce(tx):
-    return "from" in tx._transaction and "nonce" in tx._transaction
 
 
 def _chunks(values, size):

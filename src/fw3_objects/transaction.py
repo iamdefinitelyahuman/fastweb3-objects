@@ -56,6 +56,7 @@ class Transaction:
         self._transaction = _txdict or {}
         self._receipt = {}
         self._initialized = Event()
+        self._finalized = Event()
         self._status = TxStatus.UNSEEN
         self._allow_unseen = allow_unseen or bool(_txdict)
 
