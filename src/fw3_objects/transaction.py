@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import IntEnum
 from threading import Event
 
-from .account import Account
+from .account import Account, Accounts
 from .chain import Chain
 from .errors import NoActiveChain, TransactionNotFound
 
@@ -74,7 +74,7 @@ class Transaction:
     def sender(self):
         account = self._transaction.get("from")
         if account is not None:
-            account = Account(account, chain=self.chain)
+            account = Accounts._find_signer(account) or Account(account, chain=self.chain)
         return account
 
     @tx_property
@@ -82,7 +82,7 @@ class Transaction:
         # TODO if receiver is a contract, can we return `Contract` instead?
         account = self._transaction.get("to")
         if account is not None:
-            account = Account(account, chain=self.chain)
+            account = Accounts._find_signer(account) or Account(account, chain=self.chain)
         return account
 
     @tx_property

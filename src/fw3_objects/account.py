@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from getpass import getpass
 from typing import Any
+from weakref import WeakSet
 
 import fw3_keypass as kp
 from Crypto.Hash import keccak
@@ -15,6 +16,8 @@ from .errors import ChainMismatch, NoActiveChain
 
 
 class Accounts(kp.KeypassDB):
+    _instances = WeakSet()
+
     def __init__(self, name_or_path=None, *, create=None, unlock=True, password=None):
         """
         Initialize an Accounts database.
@@ -74,9 +77,19 @@ class Accounts(kp.KeypassDB):
         elif unlock:
             self.unlock(password)
         self._is_default = resolve_db_path(None) == path
+        self._instances.add(self)
 
     def _make_account(self, address: str) -> Account:
         return Account(address, db=self)
+
+    @classmethod
+    def _find_signer(cls, address):
+        for accounts in cls._instances:
+            try:
+                return accounts[address]
+            except KeyError:
+                continue
+        return None
 
     def __repr__(self) -> str:
         state = "unlocked" if self.is_unlocked else "locked"
