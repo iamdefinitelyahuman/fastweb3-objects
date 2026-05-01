@@ -26,13 +26,31 @@ class TxStatus(IntEnum):
 
 
 class Transaction:
-    def __init__(self, hash, chain=None, *, allow_unseen=False, _txdict=None):
+    def __init__(
+        self,
+        hash: str,
+        chain: Chain | int | None = None,
+        *,
+        allow_unseen: bool = False,
+        _txdict: dict | None = None,
+    ):
+        if not isinstance(hash, str):
+            raise TypeError("Transaction hash must be a string")
+
+        if len(hash) != 66 or not hash.startswith("0x"):
+            raise ValueError("Invalid transaction hash")
+
+        try:
+            int(hash[2:], 16)
+        except ValueError:
+            raise ValueError("Invalid transaction hash") from None
+
         if chain is None:
             chain, _ = Chain._get_default_chain()
             if chain is None:
                 raise NoActiveChain("No chain specified for Transaction")
 
-        self.hash = hash
+        self.hash = hash.lower()
         self.chain = Chain(chain)
 
         self._transaction = _txdict or {}
