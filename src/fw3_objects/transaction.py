@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from enum import IntEnum
 from threading import Event
 
@@ -166,11 +167,18 @@ class Transaction:
         raise NotImplementedError
 
     def confirmations(self):
-        # TODO should this be a property?
-        raise NotImplementedError
+        block_number = self.block_number
+        if block_number is None:
+            return 0
+        return max(0, self.chain.height() - block_number + 1)
 
-    def wait(self):
-        raise NotImplementedError
+    def wait(self, required_confs=1):
+        if required_confs < 1:
+            return
+        self._finalized.wait()
+        if required_confs > 1:
+            while self.confirmations() < required_confs:
+                time.sleep(1)
 
     def replace(self):
         raise NotImplementedError
