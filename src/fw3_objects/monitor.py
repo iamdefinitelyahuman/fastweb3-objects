@@ -94,8 +94,7 @@ class TransactionMonitor:
                 tx._initialized.set()
                 continue
 
-            if not tx._known and not tx._initialized.is_set():
-                tx._not_found = True
+            if tx._status == TxStatus.UNSEEN and not tx._allow_unseen:
                 tx._initialized.set()
                 remove.add(tx)
                 continue
