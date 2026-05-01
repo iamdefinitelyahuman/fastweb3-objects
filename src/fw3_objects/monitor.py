@@ -16,6 +16,7 @@ class TransactionMonitor:
         self._lock = RLock()
         self._wake = Event()
         self._thread = None
+        self.last_error = None
 
     def watch(self, tx):
         with self._lock:
@@ -28,10 +29,7 @@ class TransactionMonitor:
     def _run(self):
         while True:
             started_at = time.monotonic()
-            try:
-                self._poll_once()
-            except Exception as exc:
-                self._handle_poll_error(exc)
+            self._poll_once()
             elapsed = time.monotonic() - started_at
             self._wake.wait(max(0, POLL_INTERVAL - elapsed))
             self._wake.clear()
@@ -48,18 +46,7 @@ class TransactionMonitor:
             try:
                 self._poll_batch(batch)
             except Exception as exc:
-                self._handle_batch_error(batch, exc)
-
-    def _handle_poll_error(self, exc):
-        with self._lock:
-            watched = tuple(self._watched)
-
-        self._handle_batch_error(watched, exc)
-
-    def _handle_batch_error(self, watched, exc):
-        for tx in watched:
-            tx._error = exc
-            tx._initialized.set()
+                self.last_error = exc
 
     def _poll_batch(self, watched):
         w3 = self.chain.w3
