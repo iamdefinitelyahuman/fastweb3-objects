@@ -28,7 +28,10 @@ class TransactionMonitor:
     def _run(self):
         while True:
             started_at = time.monotonic()
-            self._poll_once()
+            try:
+                self._poll_once()
+            except Exception as exc:
+                self._handle_poll_error(exc)
             elapsed = time.monotonic() - started_at
             self._wake.wait(max(0, POLL_INTERVAL - elapsed))
             self._wake.clear()
@@ -42,7 +45,21 @@ class TransactionMonitor:
 
         transactions_per_batch = max(1, MAX_BATCH_SIZE // 3)
         for batch in _chunks(watched, transactions_per_batch):
-            self._poll_batch(batch)
+            try:
+                self._poll_batch(batch)
+            except Exception as exc:
+                self._handle_batch_error(batch, exc)
+
+    def _handle_poll_error(self, exc):
+        with self._lock:
+            watched = tuple(self._watched)
+
+        self._handle_batch_error(watched, exc)
+
+    def _handle_batch_error(self, watched, exc):
+        for tx in watched:
+            tx._error = exc
+            tx._initialized.set()
 
     def _poll_batch(self, watched):
         w3 = self.chain.w3
@@ -61,6 +78,7 @@ class TransactionMonitor:
         for tx in watched:
             txdict = tx_data[tx]
             receipt = receipts[tx]
+            tx._error = None
 
             if receipt is not None:
                 if txdict is not None:
