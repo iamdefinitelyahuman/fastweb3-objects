@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from threading import Event, RLock, Thread
+from weakref import WeakSet
 
 from .transaction import TxStatus
 
@@ -12,7 +13,7 @@ POLL_INTERVAL = 1.0
 class TransactionMonitor:
     def __init__(self, chain):
         self.chain = chain
-        self._watched = set()
+        self._watched = WeakSet()
         self._lock = RLock()
         self._wake = Event()
         self._thread = None
