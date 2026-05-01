@@ -5,6 +5,7 @@ from threading import Event
 
 from .account import Account
 from .chain import Chain
+from .errors import TransactionNotFound
 
 
 def tx_property(fn):
@@ -25,23 +26,26 @@ class TxStatus(IntEnum):
 
 
 class Transaction:
-    def __init__(self, hash, chain, txdict=None):
+    def __init__(self, hash, chain, *, allow_unseen=False, _txdict=None):
         self.hash = hash
         self.chain = Chain(chain)
 
-        self._transaction = txdict or {}
+        self._transaction = _txdict or {}
         self._receipt = {}
         self._initialized = Event()
-        self._status = TxStatus(-4)
+        self._status = TxStatus.UNSEEN
+        self._allow_unseen = allow_unseen or bool(_txdict)
 
-        if txdict:
+        if _txdict:
             self._initialized.set()
 
-        # TODO: Register this transaction with the chain transaction monitor.
+        self.chain._transaction_monitor.watch(self)
 
     def _await_initial_update(self):
         if not self._initialized.is_set():
             self._initialized.wait()
+        if self._status == TxStatus.UNSEEN and not self._allow_unseen:
+            raise TransactionNotFound(self.hash)
 
     @tx_property
     def sender(self):

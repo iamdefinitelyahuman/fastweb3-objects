@@ -47,3 +47,8 @@ class ChainMismatch(FW3ObjectsError):
 
 class NoActiveChain(FW3ObjectsError):
     pass
+
+
+class TransactionNotFound(FW3ObjectsError):
+    def __init__(self, hash):
+        super().__init__(f"Transaction not found: {hash}")

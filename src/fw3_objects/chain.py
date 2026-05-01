@@ -82,6 +82,7 @@ class Chain:
         self._chain_id = int(chain_id)
         self._w3_params: dict[str, Any] = {}
         self._w3: Web3 | None = None
+        self.__transaction_monitor = None
 
     def __repr__(self) -> str:
         """Return a developer-friendly representation."""
@@ -164,6 +165,14 @@ class Chain:
         if self._w3 is None:
             self._create_w3(**self._w3_params)
         return self._w3
+
+    @property
+    def _transaction_monitor(self):
+        if self.__transaction_monitor is None:
+            from .monitor import TransactionMonitor
+
+            self.__transaction_monitor = TransactionMonitor(self)
+        return self.__transaction_monitor
 
     def height(self) -> int:
         """Return the latest block number."""
