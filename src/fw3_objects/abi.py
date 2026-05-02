@@ -2,6 +2,7 @@ import re
 
 from Crypto.Hash import keccak
 from eth.codecs import abi as _abi
+from fw3_keypass.utils import checksum_address
 
 from .errors import ABITypeError, ABIValueError
 
@@ -114,20 +115,7 @@ def _coerce_address(value) -> str:
     if not _ADDRESS_RE.fullmatch(value):
         raise ABIValueError(f"Invalid address: {value}")
 
-    return _checksum_address(value)
-
-
-def _checksum_address(value: str) -> str:
-    value = value.removeprefix("0x")
-    lower = value.lower()
-    k = keccak.new(digest_bits=256)
-    k.update(lower.encode())
-    digest = k.hexdigest()
-
-    chars = []
-    for idx, char in enumerate(lower):
-        chars.append(char.upper() if int(digest[idx], 16) >= 8 else char)
-    return "0x" + "".join(chars)
+    return checksum_address(value)
 
 
 def _coerce_bool(value) -> bool:
