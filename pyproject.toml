@@ -15,7 +15,7 @@ authors = [
 
 dependencies = [
     "eth-stdlib>=0.2.7,<0.3",
-    "fastweb3>=0.1.5,<0.2.0",
+    "fastweb3>=0.1.6,<0.2.0",
     "fastweb3-keypass>=0.1.2,<0.2.0",
     "platformdirs>=4.0",
     "pycryptodome>=3.20",
