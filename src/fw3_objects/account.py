@@ -247,6 +247,12 @@ class Account(kp.Account):
                 raise ValueError("Gas buffer must be at least 1")
             gas_limit = int(gas_limit * gas_buffer)
 
+        if max_priority_fee_per_gas < 100:
+            max_priority_fee_per_gas = 100
+
+        if max_priority_fee_per_gas > max_fee_per_gas:
+            max_fee_per_gas = max_priority_fee_per_gas
+
         tx = build_transaction_object(
             from_=self.address,
             to=to,
