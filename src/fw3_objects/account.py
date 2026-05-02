@@ -6,7 +6,7 @@ from weakref import WeakSet
 
 import fw3_keypass as kp
 from Crypto.Hash import keccak
-from fw3.formatters import build_transaction_object
+from fw3.formatters import build_transaction_object, normalize_rpc_obj
 from fw3_keypass.crypto.rlp import rlp_encode
 from fw3_keypass.db.core import resolve_db_path
 from fw3_keypass.utils import checksum_address
@@ -280,7 +280,7 @@ class Account(kp.Account):
             chain.w3.eth.send_raw_transaction(raw_tx.raw_transaction),
             chain=chain,
             allow_unseen=True,
-            _txdict=tx,
+            _txdict=normalize_rpc_obj(tx),
         )
 
     def get_deployment_address(
