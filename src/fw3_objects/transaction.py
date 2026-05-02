@@ -180,5 +180,31 @@ class Transaction:
             while self.confirmations() < required_confs:
                 time.sleep(1)
 
-    def replace(self):
-        raise NotImplementedError
+    def replace(self, increment=1.125):
+        if self._finalized.is_set():
+            raise ValueError(f"Cannot replace transaction with status {self.status.name}")
+
+        sender = self.sender
+        if not sender.has_private_key:
+            raise ValueError("Cannot replace transaction because no signer was found for sender")
+
+        kwargs = {
+            "to": self.receiver,
+            "value": self.value,
+            "data": self.input,
+            "gas_limit": self.gas,
+            "nonce": self.nonce,
+            "chain": self.chain,
+        }
+
+        if self.gas_price is not None:
+            kwargs["gas_price"] = _bump_fee(self.gas_price, increment)
+        else:
+            kwargs["max_fee_per_gas"] = _bump_fee(self.max_fee_per_gas, increment)
+            kwargs["max_priority_fee_per_gas"] = _bump_fee(self.max_priority_fee_per_gas, increment)
+
+        return sender.transact(**kwargs)
+
+
+def _bump_fee(original, increment):
+    return max(int(original * increment), original + 1)
