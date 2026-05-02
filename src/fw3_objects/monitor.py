@@ -65,14 +65,15 @@ class TransactionMonitor:
             txdict = tx_data[tx]
             receipt = receipts[tx]
 
-            if receipt is not None:
+            if bool(receipt):
                 # receipt is available, transaction has confirmed.
-                if txdict is not None:
+                if bool(txdict):
                     tx._transaction = txdict
                 tx._receipt = receipt
+                tx._status = TxStatus(receipt["status"])
                 tx._finalized.set()
 
-            elif txdict is not None:
+            elif bool(txdict):
                 # receipt not available, but transaction is. the transaction
                 # is currently sitting in a the public mempool.
                 tx._transaction = txdict
