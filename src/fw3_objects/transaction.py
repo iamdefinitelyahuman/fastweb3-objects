@@ -2,11 +2,27 @@ from __future__ import annotations
 
 import time
 from enum import IntEnum
-from threading import Event
+from threading import Event, Thread
 
+from fw3.errors import RPCError
+
+from . import abi
 from .account import Account, Accounts
 from .chain import Chain
 from .errors import NoActiveChain, TransactionNotFound
+
+PANIC_REASONS = {
+    0x00: "generic compiler panic",
+    0x01: "assertion failed",
+    0x11: "arithmetic underflow or overflow",
+    0x12: "division or modulo by zero",
+    0x21: "invalid enum conversion",
+    0x22: "invalid storage byte array encoding",
+    0x31: "pop on empty array",
+    0x32: "array index out of bounds",
+    0x41: "memory allocation overflow",
+    0x51: "call to uninitialized internal function",
+}
 
 
 def tx_property(fn):
@@ -60,6 +76,9 @@ class Transaction:
         self._finalized = Event()
         self._status = TxStatus.UNSEEN
         self._allow_unseen = allow_unseen or bool(_txdict)
+        self._revert_data = None
+        self._revert_reason = None
+        self._revert_ready = Event()
 
         if _txdict:
             self._initialized.set()
@@ -166,6 +185,16 @@ class Transaction:
     def events(self):
         raise NotImplementedError
 
+    @tx_property
+    def revert_data(self):
+        self._revert_ready.wait()
+        return self._revert_data
+
+    @tx_property
+    def revert_reason(self):
+        self._revert_ready.wait()
+        return self._revert_reason
+
     def confirmations(self):
         block_number = self.block_number
         if block_number is None:
@@ -179,6 +208,29 @@ class Transaction:
         if required_confs > 1:
             while self.confirmations() < required_confs:
                 time.sleep(1)
+
+    def _resolve_revert_reason(self):
+        def run():
+            try:
+                tx_kwargs = {
+                    "from_": self._transaction.get("from"),
+                    "to": self._transaction.get("to"),
+                    "value": self._transaction.get("value"),
+                    "data": self._transaction.get("input"),
+                    "gas": self._transaction.get("gas"),
+                    "block": max(0, self.block_number - 1),
+                }
+                tx_kwargs = {k: v for k, v in tx_kwargs.items() if v is not None}
+
+                # convert to string to ensure the Handle finalizes and see the error
+                str(self.chain.w3.eth.call(**tx_kwargs))
+            except RPCError as exc:
+                self._revert_data = exc.details
+                self._revert_reason = _decode_revert_reason(exc.details.data)
+            finally:
+                self._revert_ready.set()
+
+        Thread(target=run, daemon=True).start()
 
     def replace(self, increment=1.125):
         if self._finalized.is_set():
@@ -208,3 +260,23 @@ class Transaction:
 
 def _bump_fee(original, increment):
     return max(int(original * increment), original + 1)
+
+
+def _decode_revert_reason(data):
+    if not isinstance(data, str):
+        return None
+
+    # Panic(uint256)
+    if data.startswith("0x4e487b71"):
+        code = abi.decode("(uint256)", bytes.fromhex(data[10:]))[0]
+
+        reason = PANIC_REASONS.get(code)
+
+        if reason:
+            return f"Panic(0x{code:x}): {reason}"
+
+        return f"Panic(0x{code:x})"
+
+    # Error(string)
+    if data.startswith("0x08c379a0"):
+        return abi.decode("(string)", bytes.fromhex(data[10:]))[0]

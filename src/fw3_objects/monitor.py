@@ -72,6 +72,8 @@ class TransactionMonitor:
                 tx._receipt = dict(receipt)
                 tx._status = TxStatus(receipt["status"])
                 tx._finalized.set()
+                if tx._status == TxStatus.REVERTED:
+                    tx._resolve_revert_reason()
 
             elif bool(txdict):
                 # receipt not available, but transaction is. the transaction
