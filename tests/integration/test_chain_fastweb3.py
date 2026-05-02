@@ -20,6 +20,11 @@ PRIORITY_FEE = 2_000_000_000
 BLOCK_GAS_LIMIT = 30_000_000
 
 
+class DummyMonitor:
+    def watch(self, tx) -> None:
+        pass
+
+
 @pytest.fixture(autouse=True)
 def reset_chain_state() -> None:
     Chain._instances.clear()
@@ -93,12 +98,9 @@ def test_chain_methods_are_wired_into_fastweb3_web3(configured_chain) -> None:
     assert chain.base_fee() == BASE_FEE
     assert chain.priority_fee() == PRIORITY_FEE
 
+    chain._Chain__transaction_monitor = DummyMonitor()
     tx = chain.get_transaction(TX_HASH)
-    assert tx is not None
-    assert tx["hash"] == TX_HASH
-    assert tx["blockNumber"] == LATEST_BLOCK
-    assert tx["from"] == TX_FROM
-    assert tx["to"] == TX_TO
+    assert tx.hash == TX_HASH
 
     block = chain.get_block(BLOCK_HASH)
     assert block is not None
@@ -117,15 +119,12 @@ def test_chain_methods_are_wired_into_fastweb3_web3(configured_chain) -> None:
         "eth_blockNumber",
         "eth_maxPriorityFeePerGas",
         "eth_blockNumber",
-        "eth_getTransactionByHash",
-        "eth_blockNumber",
         "eth_getBlockByHash",
     ]
 
     assert rpc_calls[3]["params"] == ["latest", False]
     assert rpc_calls[5]["params"] == [hex(1), "latest", []]
-    assert rpc_calls[9]["params"] == [TX_HASH]
-    assert rpc_calls[11]["params"] == [BLOCK_HASH, False]
+    assert rpc_calls[9]["params"] == [BLOCK_HASH, False]
 
 
 def _rpc_response(call: dict[str, object]) -> dict[str, object]:

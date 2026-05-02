@@ -25,6 +25,11 @@ TX_HASH = "0x" + "aa" * 32
 RECIPIENT = "0x" + "22" * 20
 
 
+class DummyMonitor:
+    def watch(self, tx) -> None:
+        pass
+
+
 @pytest.fixture(autouse=True)
 def reset_chain_state() -> None:
     Chain._instances.clear()
@@ -129,6 +134,7 @@ def test_account_methods_work_against_fastweb3_and_keypass(
     accounts_db: Accounts,
 ) -> None:
     chain, rpc_calls = configured_chain
+    chain._Chain__transaction_monitor = DummyMonitor()
     account = accounts_db.create_account(alias="alice").on(chain)
 
     assert account.balance() == BALANCE
@@ -137,7 +143,8 @@ def test_account_methods_work_against_fastweb3_and_keypass(
     assert account.nonce(block_identifier="pending") == NONCE
     assert account.call(to=RECIPIENT, data="0x1234") == CALL_RESULT
     assert account.estimate_gas(to=RECIPIENT, value=1) == ESTIMATED_GAS
-    assert account.transact(to=RECIPIENT, value=1) == TX_HASH
+    tx = account.transact(to=RECIPIENT, value=1)
+    assert tx.hash == TX_HASH
 
     methods = [call["method"] for call in rpc_calls]
     assert methods == [

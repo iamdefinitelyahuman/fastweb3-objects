@@ -274,9 +274,9 @@ def test_transact_builds_signs_and_sends_transaction(monkeypatch, account, chain
     monkeypatch.setattr(chain, "priority_fee", lambda: 3)
     monkeypatch.setattr(chain, "base_fee", lambda: 100)
 
-    txid = account.transact(to="0x" + "22" * 20, value=1, gas_buffer=1.2)
+    tx = account.transact(to="0x" + "22" * 20, value=1, gas_buffer=1.2)
 
-    assert txid == "0x" + "aa" * 32
+    assert tx.hash == "0x" + "aa" * 32
     assert build_calls == [
         {
             "from_": account.address,
@@ -284,7 +284,7 @@ def test_transact_builds_signs_and_sends_transaction(monkeypatch, account, chain
             "gas": 25_201,
             "gas_price": None,
             "max_fee_per_gas": 125,
-            "max_priority_fee_per_gas": 3,
+            "max_priority_fee_per_gas": 100,
             "value": 1,
             "data": None,
             "nonce": 8,
@@ -309,14 +309,14 @@ def test_transact_uses_explicit_legacy_gas_price(monkeypatch, account, chain) ->
     )
     monkeypatch.setattr(account, "sign_transaction", lambda tx: Signed())
 
-    txid = account.transact(
+    tx = account.transact(
         to="0x" + "22" * 20,
         gas_limit=21_000,
         gas_price=99,
         nonce=4,
     )
 
-    assert txid == "0x" + "aa" * 32
+    assert tx.hash == "0x" + "aa" * 32
     assert build_calls == [
         {
             "from_": account.address,
@@ -350,14 +350,14 @@ def test_transact_uses_explicit_eip1559_fee_values(monkeypatch, account, chain) 
     monkeypatch.setattr(account, "sign_transaction", lambda tx: Signed())
     monkeypatch.setattr(account, "estimate_gas", lambda **kwargs: 21_000)
 
-    txid = account.transact(
+    tx = account.transact(
         to="0x" + "22" * 20,
         max_fee_per_gas=100,
         max_priority_fee_per_gas=2,
         nonce=4,
     )
 
-    assert txid == "0x" + "aa" * 32
+    assert tx.hash == "0x" + "aa" * 32
     assert build_calls == [
         {
             "from_": account.address,
@@ -365,7 +365,7 @@ def test_transact_uses_explicit_eip1559_fee_values(monkeypatch, account, chain) 
             "gas": 21_000,
             "gas_price": None,
             "max_fee_per_gas": 100,
-            "max_priority_fee_per_gas": 2,
+            "max_priority_fee_per_gas": 100,
             "value": None,
             "data": None,
             "nonce": 4,

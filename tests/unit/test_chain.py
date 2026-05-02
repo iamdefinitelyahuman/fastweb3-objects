@@ -6,6 +6,7 @@ import pytest
 
 from fw3_objects.chain import Chain, configure_chain
 from fw3_objects.errors import ChainMismatch
+from fw3_objects.transaction import Transaction
 
 
 class DummyEth:
@@ -231,13 +232,15 @@ def test_priority_fee_delegates_to_web3(chain_module) -> None:
     assert chain.w3.eth.priority_fee_calls == 1
 
 
-def test_get_transaction_delegates_to_web3(chain_module) -> None:
+def test_get_transaction_returns_transaction_object(chain_module) -> None:
     chain = Chain(1)
+    tx_hash = "0x" + "ab" * 32
 
-    tx = chain.get_transaction("0xabc")
+    tx = chain.get_transaction(tx_hash)
 
-    assert tx == {"hash": "0xabc"}
-    assert chain.w3.eth.tx_calls == ["0xabc"]
+    assert isinstance(tx, Transaction)
+    assert tx.hash == tx_hash
+    assert tx.chain is chain
 
 
 def test_get_block_uses_hash_method_for_bytes(monkeypatch, chain_module) -> None:

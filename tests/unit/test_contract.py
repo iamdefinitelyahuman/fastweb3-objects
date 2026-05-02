@@ -418,3 +418,437 @@ def test_contract_async_abi_lookup_caches_on_success_and_installs_on_access(
     assert isinstance(contract.name, ContractCall)
     assert job.priority == HIGH_PRIORITY
     assert contract.abi == abi
+
+
+def test_contract_without_chain_uses_default_or_raises() -> None:
+    abi = [
+        {"type": "function", "name": "foo", "stateMutability": "view", "inputs": [], "outputs": []}
+    ]
+
+    from fw3_objects.errors import NoActiveChain
+
+    with pytest.raises(NoActiveChain, match="No chain specified"):
+        Contract(ADDRESS, abi)
+
+    default = Chain(1)
+    Chain._set_default_chain(default, False)
+
+    contract = Contract(ADDRESS, abi)
+
+    assert contract.foo.chain is default
+
+
+def test_contract_str_returns_address(chain) -> None:
+    contract = Contract(ADDRESS, [], chain=chain)
+
+    assert str(contract) == ADDRESS
+
+
+def test_contract_rejects_reserved_function_names(chain) -> None:
+    with pytest.raises(ValueError, match="reserved attribute 'abi'"):
+        Contract(
+            ADDRESS,
+            [
+                {
+                    "type": "function",
+                    "name": "abi",
+                    "stateMutability": "view",
+                    "inputs": [],
+                    "outputs": [],
+                }
+            ],
+            chain=chain,
+        )
+
+
+def test_contract_legacy_mutability_flags_install_correct_method_classes(chain) -> None:
+    contract = Contract(
+        ADDRESS,
+        [
+            {
+                "type": "function",
+                "name": "legacyView",
+                "constant": True,
+                "inputs": [],
+                "outputs": [],
+            },
+            {
+                "type": "function",
+                "name": "legacyPayable",
+                "payable": True,
+                "inputs": [],
+                "outputs": [],
+            },
+            {"type": "function", "name": "legacyTx", "inputs": [], "outputs": []},
+        ],
+        chain=chain,
+    )
+
+    assert isinstance(contract.legacyView, ContractCall)
+    assert isinstance(contract.legacyPayable, ContractTx)
+    assert isinstance(contract.legacyTx, ContractTx)
+    assert contract.legacyView.mutability == "view"
+    assert contract.legacyPayable.mutability == "payable"
+    assert contract.legacyTx.mutability == "nonpayable"
+
+
+def test_contract_method_selector_and_decode_input(chain) -> None:
+    contract = Contract(
+        ADDRESS,
+        [
+            {
+                "type": "function",
+                "name": "transfer",
+                "stateMutability": "nonpayable",
+                "inputs": [
+                    {"name": "to", "type": "address"},
+                    {"name": "amount", "type": "uint256"},
+                ],
+                "outputs": [],
+            }
+        ],
+        chain=chain,
+    )
+    calldata = contract.transfer.encode_input(SENDER, 5)
+
+    assert contract.transfer.selector == abi_module.function_selector(contract.transfer.method_abi)
+    assert contract.transfer.decode_input(calldata) == (SENDER, 5)
+
+
+def test_contract_unresolved_attribute_after_abi_resolution_raises_attribute_error(
+    monkeypatch, chain
+) -> None:
+    abi = [
+        {"type": "function", "name": "name", "stateMutability": "view", "inputs": [], "outputs": []}
+    ]
+
+    class FakeCache:
+        def get(self, chain_id, address, key):
+            return None
+
+        def set(self, chain_id, address, key, value):
+            pass
+
+    class FakeJob:
+        def bump_priority(self, priority):
+            pass
+
+        def wait(self):
+            return abi, None
+
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())
+    monkeypatch.setattr("fw3_objects.contract.fetch_abi", lambda *args, **kwargs: FakeJob())
+
+    contract = Contract(ADDRESS, chain=chain)
+
+    with pytest.raises(AttributeError, match="missing"):
+        contract.missing
+
+    assert contract.abi == abi
+
+
+def test_contract_async_abi_lookup_reraises_missing_abi_without_implementation(
+    monkeypatch, chain
+) -> None:
+    from fw3_objects.errors import ABINotFound
+
+    class FakeCache:
+        def get(self, chain_id, address, key):
+            return None
+
+        def set(self, chain_id, address, key, value):
+            raise AssertionError("missing ABI should not be cached")
+
+    class FakeJob:
+        def __init__(self):
+            self.priority = None
+
+        def bump_priority(self, priority):
+            self.priority = priority
+
+        def wait(self):
+            raise ABINotFound
+
+    job = FakeJob()
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())
+    monkeypatch.setattr("fw3_objects.contract.fetch_abi", lambda *args, **kwargs: job)
+
+    contract = Contract(ADDRESS, chain=chain)
+
+    with pytest.raises(ABINotFound):
+        contract.abi
+
+    assert job.priority == HIGH_PRIORITY
+
+
+def test_contract_missing_proxy_abi_with_forced_implementation_uses_implementation_abi(
+    monkeypatch, chain
+) -> None:
+    from fw3_objects.errors import ABINotFound
+
+    implementation = "0x" + "33" * 20
+    implementation_abi = [
+        {
+            "type": "function",
+            "name": "implOnly",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [],
+        }
+    ]
+
+    class FakeCache:
+        def get(self, chain_id, address, key):
+            if address == implementation and key == "abi":
+                return implementation_abi
+            return None
+
+        def set(self, chain_id, address, key, value):
+            pass
+
+    class FakeJob:
+        def bump_priority(self, priority):
+            pass
+
+        def wait(self):
+            raise ABINotFound
+
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())
+    monkeypatch.setattr("fw3_objects.contract.fetch_abi", lambda *args, **kwargs: FakeJob())
+
+    contract = Contract(ADDRESS, chain=chain, implementation=implementation)
+
+    assert contract.abi == implementation_abi
+    assert isinstance(contract.implOnly, ContractCall)
+
+
+def test_contract_cached_proxy_abi_overlays_cached_implementation_abi(chain, monkeypatch) -> None:
+    implementation = "0x" + "33" * 20
+    proxy_abi = [
+        {
+            "type": "function",
+            "name": "proxyOnly",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [],
+        }
+    ]
+    implementation_abi = [
+        {
+            "type": "function",
+            "name": "implOnly",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [],
+        }
+    ]
+
+    class FakeCache:
+        def get(self, chain_id, address, key):
+            if address == ADDRESS and key == "abi":
+                return proxy_abi
+            if address == ADDRESS and key == "implementation":
+                return implementation
+            if address == implementation and key == "abi":
+                return implementation_abi
+            return None
+
+        def set(self, chain_id, address, key, value):
+            raise AssertionError("cached ABI should not be rewritten")
+
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())
+    monkeypatch.setattr(
+        "fw3_objects.contract.fetch_abi",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not fetch")),
+    )
+
+    contract = Contract(ADDRESS, chain=chain)
+
+    assert isinstance(contract.implOnly, ContractCall)
+    assert isinstance(contract.proxyOnly, ContractCall)
+    assert contract.abi == implementation_abi + proxy_abi
+
+
+def test_contract_forced_implementation_starts_lookup_and_fetches_proxy_abi(
+    monkeypatch, chain
+) -> None:
+    implementation = "0x" + "33" * 20
+    proxy_abi = [
+        {
+            "type": "function",
+            "name": "proxyOnly",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [],
+        }
+    ]
+    implementation_abi = [
+        {
+            "type": "function",
+            "name": "implOnly",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [],
+        }
+    ]
+    fetch_calls = []
+
+    class FakeCache:
+        def get(self, chain_id, address, key):
+            if address == implementation and key == "abi":
+                return implementation_abi
+            return None
+
+        def set(self, chain_id, address, key, value):
+            pass
+
+    class FakeJob:
+        def bump_priority(self, priority):
+            pass
+
+        def wait(self):
+            return proxy_abi, None
+
+    def fake_fetch_abi(chain_id, address, **kwargs):
+        fetch_calls.append((address, kwargs["resolve_proxy"]))
+        return FakeJob()
+
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())
+    monkeypatch.setattr("fw3_objects.contract.fetch_abi", fake_fetch_abi)
+
+    contract = Contract(ADDRESS, chain=chain, implementation=implementation)
+
+    assert fetch_calls == [(ADDRESS, False)]
+    assert isinstance(contract.implOnly, ContractCall)
+    assert isinstance(contract.proxyOnly, ContractCall)
+
+
+def test_contract_fetch_success_with_detected_implementation_starts_implementation_lookup(
+    monkeypatch, chain
+) -> None:
+    implementation = "0x" + "33" * 20
+    proxy_abi = [
+        {
+            "type": "function",
+            "name": "proxyOnly",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [],
+        }
+    ]
+    implementation_abi = [
+        {
+            "type": "function",
+            "name": "implOnly",
+            "stateMutability": "view",
+            "inputs": [],
+            "outputs": [],
+        }
+    ]
+
+    class FakeCache:
+        def get(self, chain_id, address, key):
+            if address == implementation and key == "abi":
+                return implementation_abi
+            return None
+
+        def set(self, chain_id, address, key, value):
+            pass
+
+    class FakeJob:
+        def bump_priority(self, priority):
+            pass
+
+        def wait(self):
+            return proxy_abi, implementation
+
+    monkeypatch.setattr("fw3_objects.contract.AddressMetadataCache", lambda: FakeCache())
+    monkeypatch.setattr("fw3_objects.contract.fetch_abi", lambda *args, **kwargs: FakeJob())
+
+    contract = Contract(ADDRESS, chain=chain)
+
+    assert isinstance(contract.implOnly, ContractCall)
+    assert isinstance(contract.proxyOnly, ContractCall)
+
+
+def test_overloaded_method_empty_key_selects_no_arg_overload(chain) -> None:
+    contract = Contract(
+        ADDRESS,
+        [
+            {
+                "type": "function",
+                "name": "foo",
+                "stateMutability": "view",
+                "inputs": [],
+                "outputs": [],
+            },
+            {
+                "type": "function",
+                "name": "foo",
+                "stateMutability": "view",
+                "inputs": [{"name": "value", "type": "uint256"}],
+                "outputs": [],
+            },
+        ],
+        chain=chain,
+    )
+
+    assert contract.foo[""].signature == "foo()"
+
+
+def test_overloaded_method_call_estimate_transact_and_dunder_call_forward_to_resolved_method(
+    chain,
+) -> None:
+    outputs = [{"name": "value", "type": "uint256"}]
+    sender = DummySender(_returndata(outputs, (123,)))
+    contract = Contract(
+        ADDRESS,
+        [
+            {
+                "type": "function",
+                "name": "foo",
+                "stateMutability": "view",
+                "inputs": [],
+                "outputs": outputs,
+            },
+            {
+                "type": "function",
+                "name": "foo",
+                "stateMutability": "nonpayable",
+                "inputs": [{"name": "value", "type": "uint256"}],
+                "outputs": [],
+            },
+        ],
+        chain=chain,
+    )
+
+    assert contract.foo.call(sender=sender, block_identifier="latest") == 123
+    assert contract.foo(sender=sender, block_identifier="safe") == 123
+    assert contract.foo.estimate_gas(1, sender=sender, value=2) == 12345
+    assert contract.foo(1, sender=sender, value=2, gas_limit=30_000, nonce=4) == "0x" + "aa" * 32
+
+    assert len(sender.call_calls) == 2
+    assert sender.call_calls[0]["block_identifier"] == "latest"
+    assert sender.call_calls[1]["block_identifier"] == "safe"
+    assert sender.estimate_gas_calls == [
+        {
+            "to": contract.address,
+            "value": 2,
+            "data": contract.foo["uint256"].encode_input(1),
+            "chain": chain,
+        }
+    ]
+    assert sender.transact_calls == [
+        {
+            "to": ADDRESS,
+            "value": 2,
+            "data": contract.foo["uint256"].encode_input(1),
+            "gas_limit": 30_000,
+            "gas_buffer": None,
+            "gas_price": None,
+            "max_fee_per_gas": None,
+            "max_priority_fee_per_gas": None,
+            "chain": chain,
+            "nonce": 4,
+        }
+    ]
