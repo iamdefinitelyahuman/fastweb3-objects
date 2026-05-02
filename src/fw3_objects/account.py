@@ -183,6 +183,9 @@ class Account(kp.Account):
         Perform an eth_call as this account without broadcasting a transaction.
         """
         chain = self._resolve_chain(chain)
+        if to is not None:
+            to = str(to)
+
         tx_kwargs = dict(
             from_=self.address,
             to=to,
@@ -207,6 +210,9 @@ class Account(kp.Account):
         Estimate gas for a transaction originating from this account.
         """
         chain = self._resolve_chain(chain)
+        if to is not None:
+            to = str(to)
+
         tx_kwargs = dict(from_=self.address, to=to, value=value, data=data, chain_id=int(chain))
         tx_kwargs = {k: v for k, v in tx_kwargs.items() if v is not None}
         return chain.w3.eth.estimate_gas(**tx_kwargs)
@@ -229,6 +235,8 @@ class Account(kp.Account):
         Sign and broadcast a transaction from this account.
         """
         chain = self._resolve_chain(chain)
+        if to is not None:
+            to = str(to)
 
         with chain.w3.batch_requests():
             if nonce is None:

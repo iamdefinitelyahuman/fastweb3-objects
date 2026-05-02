@@ -270,6 +270,9 @@ class Contract:
             on_success=on_success,
         )
 
+    def __str__(self):
+        return str(self.address)
+
     def __getattr__(self, name: str):
         state = _CONTRACT_STATE[self]
         if state.abi_job is None and state.proxy_abi is None:
