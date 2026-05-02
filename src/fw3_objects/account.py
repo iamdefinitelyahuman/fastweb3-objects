@@ -274,7 +274,14 @@ class Account(kp.Account):
             chain_id=int(chain),
         )
         raw_tx = self.sign_transaction(tx)
-        return chain.w3.eth.send_raw_transaction(raw_tx.raw_transaction)
+        from .transaction import Transaction
+
+        return Transaction(
+            chain.w3.eth.send_raw_transaction(raw_tx.raw_transaction),
+            chain=chain,
+            allow_unseen=True,
+            _txdict=tx,
+        )
 
     def get_deployment_address(
         self,

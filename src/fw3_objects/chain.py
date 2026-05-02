@@ -195,17 +195,18 @@ class Chain:
         """Return the suggested max priority fee per gas."""
         return self.w3.eth.max_priority_fee_per_gas()
 
-    def get_transaction(self, txid: str | bytes):
+    def get_transaction(self, hash: str | bytes):
         """Return a transaction by hash.
 
         Args:
-            txid: Transaction hash as hex string or bytes.
+            hash: Transaction hash as hex string or bytes.
 
         Returns:
             The requested transaction object.
         """
-        # TODO this will eventually return a `Transaction` object from this library
-        return self.w3.eth.get_transaction_by_hash(txid)
+        from .transaction import Transaction
+
+        return Transaction(hash, chain=self)
 
     def get_block(self, block_identifier: int | str | bytes):
         """Return a block by number, tag, or hash.
