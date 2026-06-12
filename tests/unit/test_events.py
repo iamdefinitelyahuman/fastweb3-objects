@@ -209,3 +209,126 @@ def test_events_use_chain_bound_address_objects_when_chain_is_provided():
     assert str(unknown.address).lower() == ADDRESS.lower()
     assert isinstance(malformed.address, Contract)
     assert str(malformed.address).lower() == ADDRESS.lower()
+
+
+def test_event_list_decodes_known_events_and_builds_groups(monkeypatch):
+    class FakeContract:
+        abis = {ADDRESS.lower(): [TRANSFER_ABI]}
+
+        def __init__(self, address, *, chain=None, refresh_abi=False):
+            self.address = Account(address)
+            self.chain = chain
+            self.refresh_abi = refresh_abi
+
+        def __str__(self):
+            return str(self.address)
+
+        @property
+        def abi(self):
+            try:
+                return self.abis[str(self.address).lower()]
+            except KeyError:
+                raise AttributeError("abi") from None
+
+    monkeypatch.setattr("fw3_objects.events.Contract", FakeContract)
+
+    from fw3_objects.events import EventList
+
+    events = EventList([_transfer_log(1), _transfer_log(2)], chain=1)
+
+    assert len(events) == 2
+    assert events[0].args.value == 1
+    assert events[1].args.value == 2
+    assert events.count("Transfer") == 2
+    assert list(events.keys()) == ["Transfer"]
+    assert events["Transfer"][0] is events[0]
+    assert events.Transfer[1] is events[1]
+
+
+def test_event_list_creates_unknown_events_for_missing_abi_and_topic(monkeypatch):
+    missing_abi_address = "0x000000000000000000000000000000000000beef"
+
+    class FakeContract:
+        abis = {ADDRESS.lower(): [TRANSFER_ABI]}
+
+        def __init__(self, address, *, chain=None, refresh_abi=False):
+            self.address = Account(address)
+
+        @property
+        def abi(self):
+            try:
+                return self.abis[str(self.address).lower()]
+            except KeyError:
+                raise AttributeError("abi") from None
+
+    monkeypatch.setattr("fw3_objects.events.Contract", FakeContract)
+
+    from fw3_objects.events import EventList
+
+    no_abi_log = _transfer_log()
+    no_abi_log["address"] = missing_abi_address
+    no_topic_log = _transfer_log()
+    no_topic_log["topics"][0] = "0x" + "99" * 32
+
+    events = EventList([no_abi_log, no_topic_log], chain=1)
+
+    assert len(events) == 2
+    assert isinstance(events[0], UnknownEvent)
+    assert events[0].reason == "abi_missing"
+    assert isinstance(events[1], UnknownEvent)
+    assert events[1].reason == "topic_missing"
+    assert list(events.keys()) == []
+
+
+def test_event_list_creates_malformed_events_for_matched_abis_that_fail_decode(monkeypatch):
+    class FakeContract:
+        def __init__(self, address, *, chain=None, refresh_abi=False):
+            self.address = Account(address)
+
+        @property
+        def abi(self):
+            return [TRANSFER_ABI]
+
+    monkeypatch.setattr("fw3_objects.events.Contract", FakeContract)
+
+    from fw3_objects.events import EventList
+
+    log = _transfer_log()
+    log["data"] = "0x1234"
+    events = EventList([log], chain=1)
+
+    assert len(events) == 1
+    assert isinstance(events[0], MalformedEvent)
+    assert events[0].name == "Transfer"
+    assert events[0].malformed is True
+    assert events.count("Transfer") == 1
+    assert events["Transfer"][0] is events[0]
+
+
+def test_event_list_enrich_retries_with_abi_refresh_enabled(monkeypatch):
+    calls = []
+
+    class FakeContract:
+        def __init__(self, address, *, chain=None, refresh_abi=False):
+            self.address = Account(address)
+            self.refresh_abi = refresh_abi
+            calls.append(refresh_abi)
+
+        @property
+        def abi(self):
+            if self.refresh_abi is None:
+                return [TRANSFER_ABI]
+            raise AttributeError("abi")
+
+    monkeypatch.setattr("fw3_objects.events.Contract", FakeContract)
+
+    from fw3_objects.events import EventList
+
+    events = EventList([_transfer_log()], chain=1)
+    enriched = events.enrich()
+
+    assert isinstance(events[0], UnknownEvent)
+    assert enriched[0].name == "Transfer"
+    assert events.raw_logs == enriched.raw_logs
+    assert False in calls
+    assert None in calls
