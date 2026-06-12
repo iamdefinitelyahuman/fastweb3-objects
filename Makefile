@@ -39,3 +39,6 @@ build: clean
 
 publish: build
 	twine upload dist/*
+
+compress: clean
+	tar -czf repo.tar.gz src tests Makefile pyproject.toml
