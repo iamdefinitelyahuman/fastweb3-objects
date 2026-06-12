@@ -13,6 +13,7 @@ _HEX_RE = re.compile(r"^[0-9a-fA-F]*$")
 _DECIMAL_INT_RE = re.compile(r"^-?[0-9]+$")
 _HEX_INT_RE = re.compile(r"^-?0[xX][0-9a-fA-F]+$")
 _ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+_DYNAMIC_TYPES = {"bytes", "string"}
 
 
 def _abi_item_type(item: dict) -> str:
@@ -226,6 +227,106 @@ def encode(schema: str, values: tuple) -> bytes:
 
 def decode(schema: str, data: bytes):
     return _abi.decode(schema, data)
+
+
+def _coerce_hex(value, name: str) -> str:
+    if isinstance(value, bytes):
+        return "0x" + value.hex()
+    if not isinstance(value, str):
+        raise ABITypeError(f"{name} must be bytes or a hex string")
+    if not value.startswith("0x"):
+        raise ABIValueError(f"{name} must be 0x-prefixed")
+    try:
+        bytes.fromhex(value[2:])
+    except ValueError as exc:
+        raise ABIValueError(f"{name} must be valid hex") from exc
+    return value.lower()
+
+
+def _hex_to_bytes(value, name: str) -> bytes:
+    value = _coerce_hex(value, name)
+    return bytes.fromhex(value[2:])
+
+
+def _is_dynamic_indexed_type(item: dict) -> bool:
+    item_type = item["type"]
+    base_type, dims = _split_array_type(item_type)
+    return bool(dims) or base_type in _DYNAMIC_TYPES or base_type == "tuple"
+
+
+def _normalize_decoded_value(item: dict, value):
+    item_type = item["type"]
+    base_type, dims = _split_array_type(item_type)
+
+    if dims:
+        child = dict(item)
+        child["type"] = base_type + "".join("[]" if i is None else f"[{i}]" for i in dims[:-1])
+        return tuple(_normalize_decoded_value(child, i) for i in value)
+
+    if base_type == "address":
+        return checksum_address(value)
+    if base_type == "tuple":
+        return tuple(
+            _normalize_decoded_value(component, item_value)
+            for component, item_value in zip(item.get("components", []), value, strict=True)
+        )
+    return value
+
+
+def event_signature(event_abi: dict) -> str:
+    if event_abi.get("type") != "event":
+        raise ABIValueError("ABI item is not an event")
+
+    name = event_abi["name"]
+    inputs = event_abi.get("inputs", [])
+    types = ",".join(_abi_item_type(i) for i in inputs)
+    return f"{name}({types})"
+
+
+def event_topic(event_abi: dict) -> str:
+    k = keccak.new(digest_bits=256)
+    k.update(event_signature(event_abi).encode())
+    return "0x" + k.hexdigest()
+
+
+def decode_event(event_abi: dict, raw_log: dict) -> dict[str, object]:
+    if event_abi.get("type") != "event":
+        raise ABIValueError("ABI item is not an event")
+    if event_abi.get("anonymous", False):
+        raise ABIValueError("Anonymous events are not supported")
+
+    topics = tuple(_coerce_hex(i, "topic") for i in raw_log.get("topics", []))
+    expected_topic = event_topic(event_abi)
+    inputs = event_abi.get("inputs", [])
+    indexed = [i for i in inputs if i.get("indexed", False)]
+    non_indexed = [i for i in inputs if not i.get("indexed", False)]
+
+    expected_topics = 1 + len(indexed)
+    if len(topics) != expected_topics:
+        raise ABIValueError(f"Expected {expected_topics} topics, got {len(topics)}")
+    if topics[0] != expected_topic:
+        raise ABIValueError(f"Topic {topics[0]} does not match event topic {expected_topic}")
+
+    values = {}
+    topic_index = 1
+    data_values = decode(_abi_schema(non_indexed), _hex_to_bytes(raw_log.get("data", "0x"), "data"))
+    data_iter = iter(data_values)
+
+    for item in inputs:
+        name = item.get("name", "")
+        if item.get("indexed", False):
+            topic = topics[topic_index]
+            topic_index += 1
+            if _is_dynamic_indexed_type(item):
+                value = topic
+            else:
+                decoded = decode(_abi_schema([item]), _hex_to_bytes(topic, "topic"))[0]
+                value = _normalize_decoded_value(item, decoded)
+        else:
+            value = _normalize_decoded_value(item, next(data_iter))
+        values[name] = value
+
+    return values
 
 
 def function_signature(method_abi: dict) -> str:
