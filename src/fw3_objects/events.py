@@ -4,6 +4,9 @@ import keyword
 from collections.abc import Iterator, Mapping
 
 from .abi import decode_event, event_signature, event_topic
+from .account import Account
+from .chain import Chain
+from .contract import Contract
 
 _EVENT_ARG_RESERVED = {
     "get",
@@ -21,6 +24,12 @@ def _attr_name(name: str) -> str | None:
     if keyword.iskeyword(name) or name in _EVENT_ARG_RESERVED:
         return f"{name}_"
     return name
+
+
+def _address(address: str, chain: Chain | int | None):
+    if chain:
+        return Contract(address, chain=chain, refresh_abi=False)
+    return Account(address)
 
 
 class EventArgs(Mapping):
@@ -59,13 +68,13 @@ class Event:
     decoded = True
     malformed = False
 
-    def __init__(self, raw_log: dict, event_abi: dict):
+    def __init__(self, raw_log: dict, event_abi: dict, *, chain: Chain | int | None = None):
         self.raw = raw_log
         self.abi = event_abi
         self.name = event_abi["name"]
         self.signature = event_signature(event_abi)
         self.topic = event_topic(event_abi)
-        self.address = raw_log["address"]
+        self.address = _address(raw_log["address"], chain)
         self.topics = tuple(raw_log.get("topics", []))
         self.data = raw_log.get("data", "0x")
         self.log_index = raw_log.get("logIndex")
@@ -73,6 +82,7 @@ class Event:
         self.block_number = raw_log.get("blockNumber")
         self.removed = raw_log.get("removed", False)
         self.args = EventArgs(decode_event(event_abi, raw_log))
+        self.chain = Chain(chain) if chain else None
 
     def __getitem__(self, key):
         return self.args[key]
@@ -121,11 +131,13 @@ class UnknownEvent:
     name = None
     abi = None
 
-    def __init__(self, raw_log: dict, reason: str | None = None):
+    def __init__(
+        self, raw_log: dict, reason: str | None = None, *, chain: Chain | int | None = None
+    ):
         self.raw = raw_log
         self.reason = reason
         self.args = EventArgs({})
-        self.address = raw_log["address"]
+        self.address = Account(raw_log["address"])
         self.topics = tuple(raw_log.get("topics", []))
         self.topic = self.topics[0] if self.topics else None
         self.data = raw_log.get("data", "0x")
@@ -133,6 +145,7 @@ class UnknownEvent:
         self.transaction_hash = raw_log.get("transactionHash")
         self.block_number = raw_log.get("blockNumber")
         self.removed = raw_log.get("removed", False)
+        self.chain = Chain(chain) if chain else None
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} address={self.address} topic={self.topic}>"
@@ -141,8 +154,11 @@ class UnknownEvent:
 class MalformedEvent(UnknownEvent):
     malformed = True
 
-    def __init__(self, raw_log: dict, event_abi: dict, error: Exception):
-        super().__init__(raw_log, reason="malformed")
+    def __init__(
+        self, raw_log: dict, event_abi: dict, error: Exception, *, chain: Chain | int | None = None
+    ):
+        super().__init__(raw_log, reason="malformed", chain=chain)
+        self.address = _address(raw_log["address"], chain)
         self.abi = event_abi
         self.name = event_abi.get("name")
         self.signature = event_signature(event_abi)

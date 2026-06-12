@@ -1,6 +1,9 @@
 import pytest
 
 from fw3_objects import abi
+from fw3_objects.account import Account
+from fw3_objects.chain import Chain
+from fw3_objects.contract import Contract
 from fw3_objects.events import (
     Event,
     EventArgs,
@@ -62,7 +65,8 @@ def test_event_decodes_indexed_topics_and_data():
 
     assert event.name == "Transfer"
     assert event.signature == "Transfer(address,address,uint256)"
-    assert event.address == ADDRESS
+    assert isinstance(event.address, Account)
+    assert str(event.address).lower() == ADDRESS.lower()
     assert event.log_index == 7
     assert event.transaction_hash == TX_HASH
     assert event.block_number == 12
@@ -183,9 +187,25 @@ def test_unknown_and_malformed_events_preserve_raw_log_metadata():
     assert unknown.decoded is False
     assert unknown.malformed is False
     assert unknown.reason == "abi_missing"
-    assert unknown.address == ADDRESS
+    assert isinstance(unknown.address, Account)
+    assert str(unknown.address).lower() == ADDRESS.lower()
     assert unknown.topic == event_topic(TRANSFER_ABI)
     assert malformed.decoded is False
     assert malformed.malformed is True
     assert malformed.name == "Transfer"
     assert malformed.error is err
+
+
+def test_events_use_chain_bound_address_objects_when_chain_is_provided():
+    chain = Chain(1)
+
+    event = Event(_transfer_log(), TRANSFER_ABI, chain=chain)
+    unknown = UnknownEvent(_transfer_log(), reason="abi_missing", chain=chain)
+    malformed = MalformedEvent(_transfer_log(), TRANSFER_ABI, ValueError("bad log"), chain=chain)
+
+    assert isinstance(event.address, Contract)
+    assert str(event.address).lower() == ADDRESS.lower()
+    assert isinstance(unknown.address, Account)
+    assert str(unknown.address).lower() == ADDRESS.lower()
+    assert isinstance(malformed.address, Contract)
+    assert str(malformed.address).lower() == ADDRESS.lower()
