@@ -325,10 +325,46 @@ def test_event_list_enrich_retries_with_abi_refresh_enabled(monkeypatch):
     from fw3_objects.events import EventList
 
     events = EventList([_transfer_log()], chain=1)
-    enriched = events.enrich()
 
     assert isinstance(events[0], UnknownEvent)
-    assert enriched[0].name == "Transfer"
-    assert events.raw_logs == enriched.raw_logs
+
+    enriched = events.enrich()
+
+    assert enriched is events
+    assert events[0].name == "Transfer"
     assert False in calls
     assert None in calls
+
+
+def test_event_list_enrich_requires_chain():
+    from fw3_objects.events import EventList
+
+    events = EventList([_transfer_log()])
+
+    with pytest.raises(ValueError, match="Cannot enrich events without a chain"):
+        events.enrich()
+
+
+def test_event_list_enrich_during_init_uses_abi_refresh_enabled(monkeypatch):
+    calls = []
+
+    class FakeContract:
+        def __init__(self, address, *, chain=None, refresh_abi=False):
+            self.address = Account(address)
+            self.refresh_abi = refresh_abi
+            calls.append(refresh_abi)
+
+        @property
+        def abi(self):
+            if self.refresh_abi is None:
+                return [TRANSFER_ABI]
+            raise AttributeError("abi")
+
+    monkeypatch.setattr("fw3_objects.events.Contract", FakeContract)
+
+    from fw3_objects.events import EventList
+
+    events = EventList([_transfer_log()], chain=1, enrich=True)
+
+    assert events[0].name == "Transfer"
+    assert calls == [None, False]

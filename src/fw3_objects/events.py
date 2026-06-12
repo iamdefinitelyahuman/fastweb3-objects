@@ -7,7 +7,7 @@ from .abi import decode_event, event_signature, event_topic
 from .account import Account
 from .chain import Chain
 from .contract import Contract
-from .errors import ABINotFound, ExplorerError
+from .errors import ABINotFound, ExplorerError, NoActiveChain
 
 _EVENT_ARG_RESERVED = {
     "get",
@@ -196,7 +196,7 @@ class EventList:
                 contract_abi = contract.abi
             except AttributeError:
                 continue
-            except (ABINotFound, ExplorerError):
+            except (ABINotFound, ExplorerError, NoActiveChain):
                 continue
 
             topic_map = {}
@@ -210,7 +210,14 @@ class EventList:
         return topic_maps
 
     def enrich(self):
-        return EventList(self.raw_logs, chain=self.chain, enrich=True)
+        if self.chain is None:
+            raise ValueError("Cannot enrich events without a chain")
+
+        enriched = EventList(self.raw_logs, chain=self.chain, enrich=True)
+        self._events = enriched._events
+        self._groups = enriched._groups
+        self._attrs = enriched._attrs
+        return self
 
     def __getitem__(self, key):
         if isinstance(key, int):
