@@ -169,11 +169,42 @@ def test_wait_returns_immediately_for_zero_confirmations(chain) -> None:
     assert tx.wait(required_confs=0) is None
 
 
-def test_events_are_not_implemented(chain) -> None:
+def test_events_are_lazy_and_cached(monkeypatch, chain) -> None:
+    calls = []
+
+    class FakeEventList:
+        def __init__(self, logs, *, chain=None):
+            self.logs = tuple(logs)
+            self.chain = chain
+            calls.append((self.logs, chain))
+
+    monkeypatch.setattr("fw3_objects.transaction.EventList", FakeEventList)
+
+    tx = Transaction(TX_HASH, chain=chain, _txdict=_txdict())
+    tx._receipt = {"logs": [{"data": "0x"}]}
+
+    events = tx.events
+
+    assert events is tx.events
+    assert events.logs == ({"data": "0x"},)
+    assert events.chain is chain
+    assert calls == [(({"data": "0x"},), chain)]
+
+
+def test_events_use_empty_logs_when_receipt_has_no_logs(monkeypatch, chain) -> None:
+    calls = []
+
+    class FakeEventList:
+        def __init__(self, logs, *, chain=None):
+            calls.append((tuple(logs), chain))
+
+    monkeypatch.setattr("fw3_objects.transaction.EventList", FakeEventList)
+
     tx = Transaction(TX_HASH, chain=chain, _txdict=_txdict())
 
-    with pytest.raises(NotImplementedError):
-        tx.events
+    tx.events
+
+    assert calls == [((), chain)]
 
 
 def test_bump_fee_uses_increment_but_always_increases_by_at_least_one() -> None:

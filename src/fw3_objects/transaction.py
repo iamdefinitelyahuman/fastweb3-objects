@@ -10,6 +10,7 @@ from . import abi
 from .account import Account, Accounts
 from .chain import Chain
 from .errors import NoActiveChain, TransactionNotFound
+from .events import EventList
 
 PANIC_REASONS = {
     0x00: "generic compiler panic",
@@ -79,6 +80,7 @@ class Transaction:
         self._revert_data = None
         self._revert_reason = None
         self._revert_ready = Event()
+        self._events = None
 
         if _txdict:
             self._initialized.set()
@@ -183,7 +185,9 @@ class Transaction:
 
     @tx_property
     def events(self):
-        raise NotImplementedError
+        if self._events is None:
+            self._events = EventList(self.logs or (), chain=self.chain)
+        return self._events
 
     @tx_property
     def revert_data(self):
