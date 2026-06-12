@@ -1,3 +1,5 @@
+"""Utilities for ABI encoding, decoding, and signature handling."""
+
 import re
 
 from Crypto.Hash import keccak
@@ -222,10 +224,28 @@ def _coerce_string_int(item_type: str, value: str) -> int:
 
 
 def encode(schema: str, values: tuple) -> bytes:
+    """Encode values using an ABI schema string.
+
+    Args:
+        schema: Parenthesized ABI schema, such as ``"(address,uint256)"``.
+        values: Values to encode.
+
+    Returns:
+        ABI-encoded bytes.
+    """
     return _abi.encode(schema, values)
 
 
 def decode(schema: str, data: bytes):
+    """Decode ABI-encoded bytes using an ABI schema string.
+
+    Args:
+        schema: Parenthesized ABI schema, such as ``"(address,uint256)"``.
+        data: ABI-encoded bytes.
+
+    Returns:
+        Decoded values.
+    """
     return _abi.decode(schema, data)
 
 
@@ -274,6 +294,17 @@ def _normalize_decoded_value(item: dict, value):
 
 
 def event_signature(event_abi: dict) -> str:
+    """Return the canonical signature for an event ABI item.
+
+    Args:
+        event_abi: Event ABI item.
+
+    Returns:
+        Signature string such as ``"Transfer(address,address,uint256)"``.
+
+    Raises:
+        ABIValueError: If the ABI item is not an event.
+    """
     if event_abi.get("type") != "event":
         raise ABIValueError("ABI item is not an event")
 
@@ -284,12 +315,35 @@ def event_signature(event_abi: dict) -> str:
 
 
 def event_topic(event_abi: dict) -> str:
+    """Return the topic hash for an event ABI item.
+
+    Args:
+        event_abi: Event ABI item.
+
+    Returns:
+        Hex-encoded keccak256 hash of the event signature.
+    """
     k = keccak.new(digest_bits=256)
     k.update(event_signature(event_abi).encode())
     return "0x" + k.hexdigest()
 
 
 def decode_event(event_abi: dict, raw_log: dict) -> dict[str, object]:
+    """Decode a raw log using an event ABI item.
+
+    Indexed dynamic values are returned as their topic hash, matching Ethereum log
+    semantics.
+
+    Args:
+        event_abi: Event ABI item.
+        raw_log: RPC log object containing ``topics`` and ``data``.
+
+    Returns:
+        Mapping of event argument names to decoded values.
+
+    Raises:
+        ABIValueError: If the ABI item, topic count, or event topic is invalid.
+    """
     if event_abi.get("type") != "event":
         raise ABIValueError("ABI item is not an event")
     if event_abi.get("anonymous", False):
@@ -330,6 +384,14 @@ def decode_event(event_abi: dict, raw_log: dict) -> dict[str, object]:
 
 
 def function_signature(method_abi: dict) -> str:
+    """Return the canonical signature for a function ABI item.
+
+    Args:
+        method_abi: Function ABI item.
+
+    Returns:
+        Signature string such as ``"balanceOf(address)"``.
+    """
     name = method_abi["name"]
     inputs = method_abi.get("inputs", [])
     types = ",".join(i["type"] for i in inputs)
@@ -337,12 +399,32 @@ def function_signature(method_abi: dict) -> str:
 
 
 def function_selector(method_abi: dict) -> bytes:
+    """Return the four-byte selector for a function ABI item.
+
+    Args:
+        method_abi: Function ABI item.
+
+    Returns:
+        First four bytes of the keccak256 function signature hash.
+    """
     k = keccak.new(digest_bits=256)
     k.update(function_signature(method_abi).encode())
     return k.digest()[:4]
 
 
 def overlay_abi(implementation_abi: list[dict], proxy_abi: list[dict]) -> list[dict]:
+    """Overlay proxy ABI items on top of implementation ABI items.
+
+    Function selectors from the proxy ABI take precedence over matching
+    implementation selectors. Non-function ABI items from both lists are preserved.
+
+    Args:
+        implementation_abi: ABI for the implementation contract.
+        proxy_abi: ABI for the proxy contract.
+
+    Returns:
+        Combined ABI list.
+    """
     items = []
     functions = {}
 
@@ -362,6 +444,18 @@ def overlay_abi(implementation_abi: list[dict], proxy_abi: list[dict]) -> list[d
 
 
 def decode_calldata(method_abi: dict, hexstr: str):
+    """Decode function calldata for a specific ABI item.
+
+    Args:
+        method_abi: Function ABI item.
+        hexstr: Hex-encoded calldata including the function selector.
+
+    Returns:
+        Decoded input values.
+
+    Raises:
+        ValueError: If calldata is too short or has the wrong selector.
+    """
     data = bytes.fromhex(hexstr.removeprefix("0x"))
 
     if len(data) < 4:
@@ -380,6 +474,15 @@ def decode_calldata(method_abi: dict, hexstr: str):
 
 
 def encode_calldata(method_abi: dict, args: tuple):
+    """Encode function calldata for a specific ABI item.
+
+    Args:
+        method_abi: Function ABI item.
+        args: Function arguments.
+
+    Returns:
+        Hex-encoded calldata including the function selector.
+    """
     inputs = method_abi.get("inputs", [])
     schema = _abi_schema(inputs)
     coerced = _coerce_args(inputs, args)
@@ -388,6 +491,16 @@ def encode_calldata(method_abi: dict, args: tuple):
 
 
 def decode_returndata(method_abi: dict, hexstr: str):
+    """Decode function return data for a specific ABI item.
+
+    Args:
+        method_abi: Function ABI item.
+        hexstr: Hex-encoded return data.
+
+    Returns:
+        ``None`` for no outputs, a single value for one output, or a tuple for
+        multiple outputs.
+    """
     schema = _abi_schema(method_abi.get("outputs", []))
     values = decode(schema, bytes.fromhex(hexstr.removeprefix("0x")))
 

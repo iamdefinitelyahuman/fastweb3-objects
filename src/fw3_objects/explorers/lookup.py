@@ -1,3 +1,5 @@
+"""Internal asynchronous ABI lookup worker used by Contract."""
+
 from __future__ import annotations
 
 import itertools

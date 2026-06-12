@@ -157,6 +157,8 @@ def _resolve_abi(contract: "Contract") -> None:
 
 
 class Contract:
+    """Contract instance bound to an address and chain."""
+
     def __init__(
         self,
         address: Account | str,
@@ -167,45 +169,36 @@ class Contract:
     ):
         """Create a contract bound to an address with optional ABI resolution.
 
-        Calls always execute against ``address``. The ABI used for method dispatch
-        may come from multiple sources depending on the inputs:
+        Calls always execute against ``address``. The ABI used for method dispatch may
+        come from multiple sources depending on the inputs:
 
-        - If ``abi`` is provided:
-            The ABI is trusted as complete. No explorer lookup or proxy handling
-            is performed. If ``refresh_abi`` is ``True``, the ABI is written to
-            cache. If ``refresh_abi`` is ``None``, it is cached only if no ABI is
-            already stored.
+        - If ``abi`` is provided, it is trusted as complete and no explorer lookup or
+          proxy handling is performed.
+        - If ``implementation`` is an address, the ABI is taken from that implementation
+          and overlaid with any proxy ABI found at ``address``.
+        - If ``implementation`` is ``False``, proxy handling is disabled.
+        - Otherwise, the ABI is loaded from cache or fetched from an explorer. If the
+          contract is identified as a proxy, the implementation ABI is used and overlaid
+          with the proxy ABI.
 
-        - If ``implementation`` is an address:
-            The ABI is taken from that implementation. If a proxy ABI exists at
-            ``address``, it is overlaid on top so proxy selectors take precedence.
-
-        - If ``implementation`` is ``False``:
-            Proxy handling is disabled. The ABI is loaded only for ``address``.
-
-        - Otherwise (default):
-            The ABI is loaded from cache or fetched from an explorer. If the
-            contract is identified as a proxy, the implementation ABI is used and
-            overlaid with the proxy ABI.
-
-        Explorer lookups are asynchronous. The constructor returns immediately,
-        and the ABI is installed on first access. Until then, the ``abi``
-        attribute is not present.
+        Explorer lookups are asynchronous. The constructor returns immediately, and the
+        ABI is installed on first access. Until then, the ``abi`` attribute may not be
+        present.
 
         Args:
             address: Contract address to execute calls against.
-            abi: ABI list or path to a JSON ABI file. Bypasses all lookup logic.
-            chain: Chain or chain id. Uses the active default chain if omitted.
-            implementation: Proxy override. Address = force implementation,
-                ``False`` = ignore proxy, ``None`` = auto.
-            refresh_abi: Cache control. ``True`` forces refresh, ``False`` uses
-                cache only, ``None`` uses cache then falls back to explorer.
+            abi: ABI list or path to a JSON ABI file.
+            chain: Chain or chain ID. Uses the active default chain if omitted.
+            implementation: Proxy override. Address forces an implementation,
+                ``False`` disables proxy handling, and ``None`` enables auto-detection.
+            refresh_abi: Cache control. ``True`` forces refresh, ``False`` uses cache
+                only, and ``None`` uses cache then falls back to explorer.
 
         Raises:
             NoActiveChain: If no chain is available.
-            FileNotFoundError: If ``abi`` path does not exist.
-            TypeError: If ``abi`` is invalid.
-            ValueError: If ABI format is invalid.
+            FileNotFoundError: If an ABI path does not exist.
+            TypeError: If ``abi`` has an unsupported type.
+            ValueError: If the ABI format is invalid.
         """
         if chain is None:
             chain, _ = Chain._get_default_chain()
@@ -294,14 +287,17 @@ class _ContractMethod:
 
     @property
     def signature(self) -> str:
+        """Return the canonical function signature."""
         return abi.function_signature(self.method_abi)
 
     @property
     def selector(self) -> bytes:
+        """Return the four-byte function selector."""
         return abi.function_selector(self.method_abi)
 
     @property
     def mutability(self) -> str:
+        """Return the function state mutability."""
         if "stateMutability" in self.method_abi:
             return self.method_abi["stateMutability"]
 
@@ -322,6 +318,19 @@ class _ContractMethod:
         gas_limit: int | str | None = None,
         block_identifier: str | int | None = None,
     ):
+        """Execute the function with ``eth_call``.
+
+        Args:
+            *args: Contract function arguments.
+            sender: Optional account to use as ``msg.sender``. Uses the zero address when
+                omitted.
+            value: Call value in wei.
+            gas_limit: Optional gas limit.
+            block_identifier: Optional block number or tag.
+
+        Returns:
+            Decoded return value.
+        """
         if sender is None:
             sender = Account("0x0000000000000000000000000000000000000000")
         data = self.encode_input(*args)
@@ -336,6 +345,16 @@ class _ContractMethod:
         return deferred_response(None, ref_func=lambda h: h.set_value(self.decode_output(resp)))
 
     def estimate_gas(self, *args, sender: Account, value: int | str | None = None):
+        """Estimate gas for this contract function.
+
+        Args:
+            *args: Contract function arguments.
+            sender: Account sending the transaction.
+            value: Transaction value in wei.
+
+        Returns:
+            Estimated gas limit.
+        """
         data = self.encode_input(*args)
         return sender.estimate_gas(to=self.address, value=value, data=data, chain=self.chain)
 
@@ -351,6 +370,22 @@ class _ContractMethod:
         max_priority_fee_per_gas: int | str | None = None,
         nonce: int | str | None = None,
     ):
+        """Sign and broadcast a transaction for this contract function.
+
+        Args:
+            *args: Contract function arguments.
+            sender: Account sending the transaction.
+            value: Transaction value in wei.
+            gas_limit: Explicit gas limit. Estimated when omitted.
+            gas_buffer: Multiplier applied to the estimated gas limit.
+            gas_price: Legacy gas price.
+            max_fee_per_gas: EIP-1559 max fee per gas.
+            max_priority_fee_per_gas: EIP-1559 max priority fee per gas.
+            nonce: Explicit nonce. Queried when omitted.
+
+        Returns:
+            Transaction object for the broadcast transaction.
+        """
         data = self.encode_input(*args)
         return sender.transact(
             to=str(self.address),
@@ -366,16 +401,42 @@ class _ContractMethod:
         )
 
     def decode_input(self, hexstr: str):
+        """Decode calldata for this contract function.
+
+        Args:
+            hexstr: Hex-encoded calldata including the function selector.
+
+        Returns:
+            Decoded input values.
+        """
         return abi.decode_calldata(self.method_abi, hexstr)
 
     def encode_input(self, *args):
+        """Encode calldata for this contract function.
+
+        Args:
+            *args: Contract function arguments.
+
+        Returns:
+            Hex-encoded calldata including the function selector.
+        """
         return abi.encode_calldata(self.method_abi, args)
 
     def decode_output(self, hexstr: str):
+        """Decode return data for this contract function.
+
+        Args:
+            hexstr: Hex-encoded return data.
+
+        Returns:
+            Decoded return value.
+        """
         return abi.decode_returndata(self.method_abi, hexstr)
 
 
 class OverloadedMethod:
+    """Callable wrapper for a contract function with multiple overloads."""
+
     def __init__(self, address: Account, method_abis: list[dict], chain: Chain):
         self.address = address
         self.chain = chain
@@ -383,10 +444,12 @@ class OverloadedMethod:
 
     @property
     def name(self) -> str:
+        """Return the overloaded function name."""
         return self.method_abis[0]["name"]
 
     @property
     def signatures(self) -> list[str]:
+        """Return all available overload signatures."""
         return [abi.function_signature(i) for i in self.method_abis]
 
     def _make_method(self, method_abi: dict) -> _ContractMethod:
@@ -428,6 +491,14 @@ class OverloadedMethod:
         raise TypeError("Overload selector must be a comma-separated string or tuple of strings")
 
     def __getitem__(self, key):
+        """Select an overload by input type signature.
+
+        Args:
+            key: Comma-separated input type string or tuple of input type strings.
+
+        Returns:
+            Contract method wrapper for the selected overload.
+        """
         input_types = self._normalize_key(key)
         matches = [i for i in self.method_abis if self._input_types(i) == input_types]
 
@@ -447,6 +518,7 @@ class OverloadedMethod:
         gas_limit: int | str | None = None,
         block_identifier: str | int | None = None,
     ):
+        """Call the overload matching the provided arguments."""
         method = self._resolve_by_args(args)
         return method.call(
             *args,
@@ -457,6 +529,7 @@ class OverloadedMethod:
         )
 
     def estimate_gas(self, *args, sender: Account, value: int | str | None = None):
+        """Estimate gas for the overload matching the provided arguments."""
         method = self._resolve_by_args(args)
         return method.estimate_gas(*args, sender=sender, value=value)
 
@@ -472,6 +545,7 @@ class OverloadedMethod:
         max_priority_fee_per_gas: int | str | None = None,
         nonce: int | str | None = None,
     ):
+        """Broadcast a transaction for the overload matching the provided arguments."""
         method = self._resolve_by_args(args)
         return method.transact(
             *args,
@@ -498,6 +572,7 @@ class OverloadedMethod:
         nonce: int | str | None = None,
         block_identifier: str | int | None = None,
     ):
+        """Call or transact using the overload matching the provided arguments."""
         method = self._resolve_by_args(args)
 
         if isinstance(method, ContractCall):
@@ -523,6 +598,8 @@ class OverloadedMethod:
 
 
 class ContractCall(_ContractMethod):
+    """Callable wrapper for a view or pure contract function."""
+
     def __call__(
         self,
         *args,
@@ -531,6 +608,7 @@ class ContractCall(_ContractMethod):
         gas_limit: int | str | None = None,
         block_identifier: str | int | None = None,
     ):
+        """Execute the contract function with ``eth_call``."""
         return self.call(
             *args,
             sender=sender,
@@ -541,6 +619,8 @@ class ContractCall(_ContractMethod):
 
 
 class ContractTx(_ContractMethod):
+    """Callable wrapper for a nonpayable or payable contract function."""
+
     def __call__(
         self,
         *args,
@@ -553,6 +633,7 @@ class ContractTx(_ContractMethod):
         max_priority_fee_per_gas: int | str | None = None,
         nonce: int | str | None = None,
     ):
+        """Sign and broadcast a transaction for the contract function."""
         return self.transact(
             *args,
             sender=sender,

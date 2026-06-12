@@ -1,3 +1,5 @@
+"""Internal Etherscan ABI provider used by contract ABI resolution."""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,5 @@
+"""Internal SQLite cache storage used by fw3-objects."""
+
 from __future__ import annotations
 
 import sqlite3

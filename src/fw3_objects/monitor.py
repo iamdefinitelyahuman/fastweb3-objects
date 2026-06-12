@@ -1,3 +1,5 @@
+"""Internal transaction monitoring process used by Chain and Transaction."""
+
 from __future__ import annotations
 
 import time
@@ -11,6 +13,13 @@ POLL_INTERVAL = 1.0
 
 
 class TransactionMonitor:
+    """Internal transaction polling process for a Chain.
+
+    Users do not instantiate this class directly. A Chain creates one lazily when a
+    Transaction is watched, and Transaction objects use it to receive mempool,
+    receipt, replacement, and drop updates.
+    """
+
     def __init__(self, chain):
         self.chain = chain
         self._watched = WeakSet()

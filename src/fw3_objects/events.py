@@ -44,7 +44,14 @@ def _log_address(raw_log: dict) -> str:
 
 
 class EventArgs(Mapping):
+    """Mapping of decoded event argument names to values."""
+
     def __init__(self, values: Mapping[str, object]):
+        """Initialize decoded event arguments.
+
+        Args:
+            values: Mapping of argument names to decoded values.
+        """
         self._values = dict(values)
         self._attrs = {}
 
@@ -55,17 +62,21 @@ class EventArgs(Mapping):
             self._attrs[attr] = name
 
     def __getitem__(self, key):
+        """Return an event argument by name or position."""
         if isinstance(key, int):
             return tuple(self._values.values())[key]
         return self._values[key]
 
     def __iter__(self) -> Iterator[str]:
+        """Iterate over argument names."""
         return iter(self._values)
 
     def __len__(self) -> int:
+        """Return the number of event arguments."""
         return len(self._values)
 
     def __getattr__(self, name: str):
+        """Return an argument by attribute name when safe."""
         try:
             return self._values[self._attrs[name]]
         except KeyError:
@@ -76,10 +87,19 @@ class EventArgs(Mapping):
 
 
 class Event:
+    """Decoded contract event log."""
+
     decoded = True
     malformed = False
 
     def __init__(self, raw_log: dict, event_abi: dict, *, chain: Chain | int | None = None):
+        """Decode a raw log using an event ABI.
+
+        Args:
+            raw_log: RPC log object.
+            event_abi: Event ABI item.
+            chain: Chain or chain ID used for the emitting address.
+        """
         self.raw = raw_log
         self.abi = event_abi
         self.name = event_abi["name"]
@@ -96,6 +116,7 @@ class Event:
         self.chain = Chain(chain) if chain is not None else None
 
     def __getitem__(self, key):
+        """Return a decoded event argument by name or position."""
         return self.args[key]
 
     def __repr__(self) -> str:
@@ -103,10 +124,14 @@ class Event:
 
 
 class EventGroup:
+    """Sequence-like group of events with the same event name."""
+
     def __init__(self, events):
+        """Initialize a group from decoded events."""
         self._events = tuple(events)
 
     def __getitem__(self, key):
+        """Return an event by index or, for single-event groups, an argument by name."""
         if isinstance(key, int):
             return self._events[key]
         if isinstance(key, str):
@@ -116,15 +141,19 @@ class EventGroup:
         raise TypeError("EventGroup indices must be integers or argument names")
 
     def __iter__(self):
+        """Iterate over grouped events."""
         return iter(self._events)
 
     def __len__(self):
+        """Return the number of grouped events."""
         return len(self._events)
 
     def __bool__(self):
+        """Return whether the group contains any events."""
         return bool(self._events)
 
     def __getattr__(self, name: str):
+        """Return an argument attribute for single-event groups."""
         if len(self._events) != 1:
             raise AttributeError(name)
         try:
@@ -137,6 +166,12 @@ class EventGroup:
 
 
 class EventList:
+    """Decoded transaction or receipt event logs.
+
+    Events are available by index, by event name, and as safe attributes when the
+    event name is a valid attribute name.
+    """
+
     def __init__(
         self,
         raw_logs,
@@ -144,6 +179,13 @@ class EventList:
         chain: Chain | int | None = None,
         enrich: bool = False,
     ):
+        """Initialize an event list from raw logs.
+
+        Args:
+            raw_logs: Iterable of RPC log objects.
+            chain: Chain or chain ID used for ABI lookup and emitting addresses.
+            enrich: Whether to refresh missing ABIs through explorer lookup.
+        """
         self.raw_logs = tuple(raw_logs)
         self.chain = Chain(chain) if chain is not None else None
         self._events = tuple(self._decode_logs(enrich))
@@ -210,6 +252,14 @@ class EventList:
         return topic_maps
 
     def enrich(self):
+        """Refresh ABI data and re-decode events in place.
+
+        Returns:
+            This EventList instance.
+
+        Raises:
+            ValueError: If the event list has no chain.
+        """
         if self.chain is None:
             raise ValueError("Cannot enrich events without a chain")
 
@@ -220,6 +270,7 @@ class EventList:
         return self
 
     def __getitem__(self, key):
+        """Return an event by index or an event group by name."""
         if isinstance(key, int):
             return self._events[key]
         if isinstance(key, str):
@@ -227,30 +278,38 @@ class EventList:
         raise TypeError("EventList indices must be integers or event names")
 
     def __iter__(self):
+        """Iterate over decoded events."""
         return iter(self._events)
 
     def __len__(self):
+        """Return the number of events."""
         return len(self._events)
 
     def __bool__(self):
+        """Return whether the list contains any events."""
         return bool(self._events)
 
     def __getattr__(self, name: str):
+        """Return an event group by safe event-name attribute."""
         try:
             return self._groups[self._attrs[name]]
         except KeyError:
             raise AttributeError(name) from None
 
     def count(self, name: str) -> int:
+        """Return the number of events with a given name."""
         return len(self._groups.get(name, ()))
 
     def keys(self):
+        """Return event names present in the list."""
         return self._groups.keys()
 
     def items(self):
+        """Return ``(name, EventGroup)`` pairs."""
         return self._groups.items()
 
     def values(self):
+        """Return event groups present in the list."""
         return self._groups.values()
 
     def __repr__(self) -> str:
@@ -258,6 +317,8 @@ class EventList:
 
 
 class UnknownEvent:
+    """Raw log that could not be decoded."""
+
     decoded = False
     malformed = False
     name = None
@@ -266,6 +327,13 @@ class UnknownEvent:
     def __init__(
         self, raw_log: dict, reason: str | None = None, *, chain: Chain | int | None = None
     ):
+        """Initialize an undecoded raw log.
+
+        Args:
+            raw_log: RPC log object.
+            reason: Reason the log could not be decoded.
+            chain: Chain or chain ID associated with the log.
+        """
         self.raw = raw_log
         self.reason = reason
         self.args = EventArgs({})
@@ -284,11 +352,21 @@ class UnknownEvent:
 
 
 class MalformedEvent(UnknownEvent):
+    """Log whose ABI was found but failed to decode."""
+
     malformed = True
 
     def __init__(
         self, raw_log: dict, event_abi: dict, error: Exception, *, chain: Chain | int | None = None
     ):
+        """Initialize a malformed decoded event placeholder.
+
+        Args:
+            raw_log: RPC log object.
+            event_abi: Event ABI item that failed to decode the log.
+            error: Decode error.
+            chain: Chain or chain ID associated with the log.
+        """
         super().__init__(raw_log, reason="malformed", chain=chain)
         self.address = _address(raw_log["address"], chain)
         self.abi = event_abi

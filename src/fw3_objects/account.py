@@ -16,49 +16,34 @@ from .errors import ChainMismatch, NoActiveChain
 
 
 class Accounts(kp.KeypassDB):
+    """Keypass-backed account database."""
+
     _instances = WeakSet()
 
     def __init__(self, name_or_path=None, *, create=None, unlock=True, password=None):
-        """
-        Initialize an Accounts database.
+        """Initialize an account database.
 
-        This constructor provides a streamlined interface for opening or creating
-        a keypass-backed account database. Behavior depends on whether a path is
-        provided and whether the database already exists.
+        Behavior depends on whether a path is provided and whether the database already
+        exists.
 
         Default behavior:
-        - If `name_or_path` is None, the default database is used.
-        - If it does not exist, it will be created.
-        - If it exists, it will be opened and unlocked.
-        - If `name_or_path` is provided:
-        - If the database exists, it will be opened.
-        - If it does not exist, it will only be created if `create=True`,
-            otherwise a FileNotFoundError is raised.
+            - If ``name_or_path`` is ``None``, the default database is used.
+            - If the default database does not exist, it is created.
+            - If the default database exists, it is opened and unlocked.
+            - If ``name_or_path`` is provided and exists, it is opened.
+            - If ``name_or_path`` is provided and does not exist, it is created only
+              when ``create=True``.
 
         Args:
-            name_or_path (str | os.PathLike | None):
-                Name or filesystem path of the database. If None, the default
-                database location is used.
-
-            create (bool | None):
-                Whether to create the database if it does not exist.
-                - If None, defaults to True when using the default database,
-                and False otherwise.
-                - If False and the database does not exist, raises FileNotFoundError.
-
-            unlock (bool):
-                Whether to unlock the database after opening. Ignored when creating
-                a new database.
-
-            password (str | None):
-                Password used to initialize or unlock the database.
-                - If creating a new database and None, the user is prompted.
-                - If unlocking an existing database and None, the underlying
-                keypass logic may prompt for input.
+            name_or_path: Database name or filesystem path. Uses the default database
+                location when omitted.
+            create: Whether to create the database if it does not exist. If omitted,
+                defaults to ``True`` only for the default database.
+            unlock: Whether to unlock an existing database after opening it.
+            password: Password used to initialize or unlock the database.
 
         Raises:
-            FileNotFoundError:
-                If the database does not exist and `create` is False.
+            FileNotFoundError: If the database does not exist and ``create`` is false.
         """
         path = resolve_db_path(name_or_path)
         if create is None:
@@ -98,6 +83,8 @@ class Accounts(kp.KeypassDB):
 
 
 class Account(kp.Account):
+    """Ethereum account object with optional chain binding."""
+
     def __init__(
         self,
         address: str,
@@ -105,12 +92,25 @@ class Account(kp.Account):
         db=None,
         chain: Chain | int | None = None,
     ) -> None:
+        """Initialize an account wrapper.
+
+        Args:
+            address: Account address.
+            db: Keypass database that owns the account, if available.
+            chain: Chain or chain ID to bind this account to. If omitted, chain-specific
+                methods use their ``chain`` argument or the active default chain.
+        """
         super().__init__(address, db=db)
         self._bound_chain = None if chain is None else Chain(chain)
 
     def on(self, chain: Chain | int) -> Account:
-        """
-        Return a new Account instance bound to the given chain.
+        """Return a copy of this account bound to a chain.
+
+        Args:
+            chain: Chain or chain ID to bind.
+
+        Returns:
+            Account bound to the requested chain.
         """
         return Account(self.address, db=self._db, chain=chain)
 
@@ -120,8 +120,15 @@ class Account(kp.Account):
         chain: Chain | int | None = None,
         block_identifier: str | int | None = None,
     ) -> int:
-        """
-        Return native token balance for this account.
+        """Return the native token balance for this account.
+
+        Args:
+            chain: Chain or chain ID to query. Uses the bound or default chain when
+                omitted.
+            block_identifier: Optional block number or tag.
+
+        Returns:
+            Balance in wei.
         """
         w3 = self._resolve_chain(chain).w3
         if block_identifier is None:
@@ -135,8 +142,15 @@ class Account(kp.Account):
         chain: Chain | int | None = None,
         block_identifier: str | int | None = None,
     ) -> int:
-        """
-        Return the transaction nonce for this account.
+        """Return the transaction count for this account.
+
+        Args:
+            chain: Chain or chain ID to query. Uses the bound or default chain when
+                omitted.
+            block_identifier: Optional block number or tag.
+
+        Returns:
+            Account nonce at the requested block.
         """
         w3 = self._resolve_chain(chain).w3
         if block_identifier is None:
@@ -150,6 +164,16 @@ class Account(kp.Account):
         chain: Chain | int | None = None,
         block_identifier: str | int | None = None,
     ):
+        """Return code stored at this account address.
+
+        Args:
+            chain: Chain or chain ID to query. Uses the bound or default chain when
+                omitted.
+            block_identifier: Optional block number or tag.
+
+        Returns:
+            Contract bytecode, or empty bytes for an externally owned account.
+        """
         w3 = self._resolve_chain(chain).w3
         if block_identifier is None:
             return w3.eth.get_code(self.address)
@@ -163,6 +187,17 @@ class Account(kp.Account):
         chain: Chain | int | None = None,
         block_identifier: str | int | None = None,
     ):
+        """Return a storage slot value for this account address.
+
+        Args:
+            position: Storage slot index.
+            chain: Chain or chain ID to query. Uses the bound or default chain when
+                omitted.
+            block_identifier: Optional block number or tag.
+
+        Returns:
+            Raw storage slot value.
+        """
         w3 = self._resolve_chain(chain).w3
         if block_identifier is None:
             return w3.eth.get_storage_at(self.address, position)
@@ -179,8 +214,19 @@ class Account(kp.Account):
         chain: Chain | int | None = None,
         block_identifier: str | int | None = None,
     ) -> Any:
-        """
-        Perform an eth_call as this account without broadcasting a transaction.
+        """Perform an ``eth_call`` as this account.
+
+        Args:
+            to: Destination address.
+            value: Call value in wei.
+            data: Call data.
+            gas_limit: Optional gas limit.
+            chain: Chain or chain ID to query. Uses the bound or default chain when
+                omitted.
+            block_identifier: Optional block number or tag.
+
+        Returns:
+            Raw call return data.
         """
         chain = self._resolve_chain(chain)
         if to is not None:
@@ -206,8 +252,17 @@ class Account(kp.Account):
         data: bytes | str | None = None,
         chain: Chain | int | None = None,
     ) -> int:
-        """
-        Estimate gas for a transaction originating from this account.
+        """Estimate gas for a transaction from this account.
+
+        Args:
+            to: Destination address.
+            value: Transaction value in wei.
+            data: Transaction calldata.
+            chain: Chain or chain ID to query. Uses the bound or default chain when
+                omitted.
+
+        Returns:
+            Estimated gas limit.
         """
         chain = self._resolve_chain(chain)
         if to is not None:
@@ -231,8 +286,25 @@ class Account(kp.Account):
         nonce: int | str | None = None,
         chain: Chain | int | None = None,
     ) -> Any:
-        """
-        Sign and broadcast a transaction from this account.
+        """Sign and broadcast a transaction from this account.
+
+        Missing nonce and fee fields are filled from the target chain before signing.
+
+        Args:
+            to: Destination address. May be omitted for contract creation.
+            value: Transaction value in wei.
+            data: Transaction calldata.
+            gas_limit: Explicit gas limit. Estimated when omitted.
+            gas_buffer: Multiplier applied to the estimated gas limit.
+            gas_price: Legacy gas price.
+            max_fee_per_gas: EIP-1559 max fee per gas.
+            max_priority_fee_per_gas: EIP-1559 max priority fee per gas.
+            nonce: Explicit nonce. Queried when omitted.
+            chain: Chain or chain ID to broadcast on. Uses the bound or default chain
+                when omitted.
+
+        Returns:
+            Transaction object for the broadcast transaction.
         """
         chain = self._resolve_chain(chain)
         if to is not None:
@@ -290,8 +362,18 @@ class Account(kp.Account):
         nonce: int | None = None,
         chain: Chain | int | None = None,
     ) -> str:
-        """
-        Compute the CREATE address for this account at the given nonce.
+        """Compute this account's CREATE deployment address.
+
+        Args:
+            nonce: Nonce to use. If omitted, the current account nonce is queried.
+            chain: Chain or chain ID used when ``nonce`` must be queried.
+
+        Returns:
+            Checksummed deployment address.
+
+        Raises:
+            TypeError: If ``nonce`` is not an integer.
+            ValueError: If ``nonce`` is negative.
         """
         if nonce is None:
             nonce = self.nonce(chain=chain)

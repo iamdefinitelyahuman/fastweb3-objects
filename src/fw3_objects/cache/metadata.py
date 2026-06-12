@@ -1,3 +1,5 @@
+"""Internal address metadata cache used for ABI and proxy metadata."""
+
 from __future__ import annotations
 
 import json

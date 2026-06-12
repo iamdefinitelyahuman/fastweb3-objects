@@ -1,3 +1,5 @@
+"""Internal RPC response cache middleware used by Chain Web3 instances."""
+
 from __future__ import annotations
 
 import json

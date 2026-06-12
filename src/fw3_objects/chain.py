@@ -45,7 +45,7 @@ class _DefaultChainContext(AbstractContextManager["Chain"]):
 
 
 class Chain:
-    """Canonical chain context for block and transaction access."""
+    """Canonical chain context for block, transaction, and contract access."""
 
     _instances: dict[int, "Chain"] = {}
     _instances_lock = threading.RLock()
@@ -53,13 +53,13 @@ class Chain:
     _thread_local = threading.local()
 
     def __new__(cls, chain_id: int) -> "Chain":
-        """Return the canonical instance for ``chain_id``.
+        """Return the canonical instance for a chain ID.
 
         Args:
             chain_id: Chain ID to instantiate.
 
         Returns:
-            The canonical ``Chain`` instance for the given chain ID.
+            Canonical Chain instance for the given chain ID.
         """
         chain_id = int(chain_id)
 
@@ -70,7 +70,10 @@ class Chain:
             return cls._instances[chain_id]
 
     def __init__(self, chain_id: int) -> None:
-        """Initialize the chain and create its default Web3 client.
+        """Initialize chain state.
+
+        Web3 configuration is stored immediately, but the Web3 client itself is created
+        lazily on first access.
 
         Args:
             chain_id: Chain ID to initialize.
@@ -93,7 +96,11 @@ class Chain:
         return self.id
 
     def __len__(self) -> int:
-        """Return the number of addressable block indices."""
+        """Return the number of addressable block indices.
+
+        Returns:
+            Deferred value resolving to latest block height plus one.
+        """
         height = self.height()
         return deferred_response(None, ref_func=lambda h: h.set_value(height + 1))
 
@@ -106,7 +113,7 @@ class Chain:
             block_number: Absolute or negative-relative block number.
 
         Returns:
-            The requested block object.
+            Requested block object.
 
         Raises:
             TypeError: If ``block_number`` is not an integer.
@@ -146,8 +153,7 @@ class Chain:
 
     @property
     def w3(self) -> Web3:
-        """
-        Return the configured ``Web3`` instance for this chain.
+        """Return the configured Web3 instance for this chain.
 
         The instance is created lazily on first access.
 
@@ -156,8 +162,8 @@ class Chain:
         will raise.
 
         Raises:
-            ChainMismatch: If a strict default chain context is active and this
-                chain is not the default.
+            ChainMismatch: If a strict default chain context is active and this chain is
+                not the default chain.
         """
         default_chain, strict = self._get_default_chain()
         if strict and default_chain is not None and default_chain is not self:
@@ -199,10 +205,10 @@ class Chain:
         """Return a transaction by hash.
 
         Args:
-            hash: Transaction hash as hex string or bytes.
+            hash: Transaction hash as a hex string or bytes.
 
         Returns:
-            The requested transaction object.
+            Transaction object.
         """
         from .transaction import Transaction
 
@@ -215,7 +221,7 @@ class Chain:
             block_identifier: Block number, block tag, or block hash.
 
         Returns:
-            The requested block object.
+            RPC block object.
         """
         if isinstance(block_identifier, bytes):
             return self.w3.eth.get_block_by_hash(
@@ -245,11 +251,11 @@ class Chain:
             poll_interval: Target polling interval in seconds.
 
         Yields:
-            Each new buffered block, in ascending height order.
+            New buffered blocks in ascending height order.
 
         Raises:
-            ValueError: If ``height_buffer`` is negative.
-            ValueError: If ``poll_interval`` is not positive.
+            ValueError: If ``height_buffer`` is negative or ``poll_interval`` is not
+                positive.
         """
         if height_buffer < 0:
             raise ValueError("height_buffer must be >= 0")
@@ -274,10 +280,11 @@ class Chain:
         """Return a context manager that sets this thread's default chain.
 
         Args:
-            strict: Whether to raise if a different default chain is already set.
+            strict: Whether to reject access through any other chain while the context
+                is active.
 
         Returns:
-            A context manager that restores the previous default chain on exit.
+            Context manager that restores the previous default chain on exit.
         """
         return _DefaultChainContext(self, strict=strict)
 
@@ -301,7 +308,7 @@ class Chain:
 
 
 def configure_chain(chain: Chain | int, **w3_params: Any) -> None:
-    """Configure the canonical ``Chain`` instance for a chain ID.
+    """Configure the canonical Chain instance for a chain ID.
 
     Args:
         chain: Chain instance or chain ID to configure.
