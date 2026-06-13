@@ -68,12 +68,30 @@ class Accounts(kp.KeypassDB):
         return Account(address, db=self)
 
     @classmethod
-    def _find_signer(cls, address):
-        for accounts in cls._instances:
+    def _find_db(cls, address):
+        try:
+            address = checksum_address(address)
+        except (TypeError, ValueError):
+            return None
+
+        # first attempt to return an unlocked db
+        for db in cls._instances:
             try:
-                return accounts[address]
+                account = db[address]
             except KeyError:
                 continue
+            if account.can_sign:
+                return db
+
+        # next try for a locked db
+        for db in cls._instances:
+            try:
+                account = db[address]
+            except KeyError:
+                continue
+            if account.has_private_key:
+                return db
+
         return None
 
     def __repr__(self) -> str:
@@ -100,6 +118,8 @@ class Account(kp.Account):
             chain: Chain or chain ID to bind this account to. If omitted, chain-specific
                 methods use their ``chain`` argument or the active default chain.
         """
+        if db is None:
+            db = Accounts._find_db(address)
         super().__init__(address, db=db)
         self._bound_chain = None if chain is None else Chain(chain)
 

@@ -7,7 +7,7 @@ from threading import Event, Thread
 from fw3.errors import RPCError
 
 from . import abi
-from .account import Account, Accounts
+from .account import Account
 from .chain import Chain
 from .errors import NoActiveChain, TransactionNotFound
 from .events import EventList
@@ -116,7 +116,7 @@ class Transaction:
         """Return the sender account, if known."""
         account = self._transaction.get("from")
         if account is not None:
-            account = Accounts._find_signer(account) or Account(account, chain=self.chain)
+            account = Account(account, chain=self.chain)
         return account
 
     @tx_property
@@ -125,7 +125,7 @@ class Transaction:
         # TODO if receiver is a contract, can we return `Contract` instead?
         account = self._transaction.get("to")
         if account is not None:
-            account = Accounts._find_signer(account) or Account(account, chain=self.chain)
+            account = Account(account, chain=self.chain)
         return account
 
     @tx_property

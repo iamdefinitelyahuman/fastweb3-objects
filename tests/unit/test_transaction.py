@@ -280,10 +280,7 @@ def test_replace_bumps_legacy_gas_price_and_rebroadcasts(monkeypatch, chain) -> 
             return "replacement"
 
     tx = Transaction(TX_HASH, chain=chain, _txdict=_txdict())
-    monkeypatch.setattr(
-        "fw3_objects.transaction.Accounts._find_signer",
-        classmethod(lambda cls, address: Signer() if address == SENDER else None),
-    )
+    monkeypatch.setattr("fw3_objects.transaction.Transaction.sender", Signer())
 
     assert tx.replace(increment=1.5) == "replacement"
     assert len(calls) == 1
@@ -313,10 +310,7 @@ def test_replace_bumps_eip1559_fees_and_rebroadcasts(monkeypatch, chain) -> None
             return "replacement"
 
     tx = Transaction(TX_HASH, chain=chain, _txdict=txdict)
-    monkeypatch.setattr(
-        "fw3_objects.transaction.Accounts._find_signer",
-        classmethod(lambda cls, address: Signer() if address == SENDER else None),
-    )
+    monkeypatch.setattr("fw3_objects.transaction.Transaction.sender", Signer())
 
     assert tx.replace(increment=1.5) == "replacement"
     assert len(calls) == 1
