@@ -315,7 +315,7 @@ class _ContractMethod:
         *args,
         sender: Account = None,
         value: int | str | None = None,
-        gas_limit: int | str | None = None,
+        gas_limit: int | None = None,
         block_identifier: str | int | None = None,
     ):
         """Execute the function with ``eth_call``.
@@ -363,7 +363,7 @@ class _ContractMethod:
         *args,
         sender: Account,
         value: int | str | None = None,
-        gas_limit: int | str | None = None,
+        gas_limit: int | None = None,
         gas_buffer: float | None = None,
         gas_price: int | str | None = None,
         max_fee_per_gas: int | str | None = None,
@@ -515,7 +515,7 @@ class OverloadedMethod:
         *args,
         sender: Account = None,
         value: int | str | None = None,
-        gas_limit: int | str | None = None,
+        gas_limit: int | None = None,
         block_identifier: str | int | None = None,
     ):
         """Call the overload matching the provided arguments."""
@@ -538,7 +538,7 @@ class OverloadedMethod:
         *args,
         sender: Account,
         value: int | str | None = None,
-        gas_limit: int | str | None = None,
+        gas_limit: int | None = None,
         gas_buffer: float | None = None,
         gas_price: int | str | None = None,
         max_fee_per_gas: int | str | None = None,
@@ -564,7 +564,7 @@ class OverloadedMethod:
         *args,
         sender=None,
         value: int | str | None = None,
-        gas_limit: int | str | None = None,
+        gas_limit: int | None = None,
         gas_buffer: float | None = None,
         gas_price: int | str | None = None,
         max_fee_per_gas: int | str | None = None,
@@ -605,7 +605,7 @@ class ContractCall(_ContractMethod):
         *args,
         sender=None,
         value: int | str | None = None,
-        gas_limit: int | str | None = None,
+        gas_limit: int | None = None,
         block_identifier: str | int | None = None,
     ):
         """Execute the contract function with ``eth_call``."""
@@ -626,7 +626,7 @@ class ContractTx(_ContractMethod):
         *args,
         sender: Account,
         value: int | str | None = None,
-        gas_limit: int | str | None = None,
+        gas_limit: int | None = None,
         gas_buffer: float | None = None,
         gas_price: int | str | None = None,
         max_fee_per_gas: int | str | None = None,

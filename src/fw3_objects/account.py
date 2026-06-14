@@ -13,6 +13,7 @@ from fw3_keypass.utils import checksum_address
 
 from .chain import Chain
 from .errors import ChainMismatch, NoActiveChain
+from .units import to_wei
 
 
 class Accounts(kp.KeypassDB):
@@ -230,7 +231,7 @@ class Account(kp.Account):
         *,
         value: int | str | None = None,
         data: bytes | str | None = None,
-        gas_limit: int | str | None = None,
+        gas_limit: int | None = None,
         chain: Chain | int | None = None,
         block_identifier: str | int | None = None,
     ) -> Any:
@@ -251,6 +252,8 @@ class Account(kp.Account):
         chain = self._resolve_chain(chain)
         if to is not None:
             to = str(to)
+
+        value = to_wei(value)
 
         tx_kwargs = dict(
             from_=self.address,
@@ -288,6 +291,8 @@ class Account(kp.Account):
         if to is not None:
             to = str(to)
 
+        value = to_wei(value)
+
         tx_kwargs = dict(from_=self.address, to=to, value=value, data=data, chain_id=int(chain))
         tx_kwargs = {k: v for k, v in tx_kwargs.items() if v is not None}
         return chain.w3.eth.estimate_gas(**tx_kwargs)
@@ -298,7 +303,7 @@ class Account(kp.Account):
         value: int | str | None = None,
         *,
         data: bytes | str | None = None,
-        gas_limit: int | str | None = None,
+        gas_limit: int | None = None,
         gas_buffer: float | None = None,
         gas_price: int | str | None = None,
         max_fee_per_gas: int | str | None = None,
@@ -329,6 +334,10 @@ class Account(kp.Account):
         chain = self._resolve_chain(chain)
         if to is not None:
             to = str(to)
+        value = to_wei(value)
+        gas_price = to_wei(gas_price)
+        max_fee_per_gas = to_wei(max_fee_per_gas)
+        max_priority_fee_per_gas = to_wei(max_priority_fee_per_gas)
 
         with chain.w3.batch_requests():
             if nonce is None:

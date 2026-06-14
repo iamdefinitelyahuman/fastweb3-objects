@@ -422,3 +422,115 @@ def test_resolve_chain_rejects_missing_chain_for_unbound_account() -> None:
 def test_resolve_chain_rejects_mismatched_explicit_chain(account) -> None:
     with pytest.raises(ChainMismatch, match="bound Account"):
         account._resolve_chain(2)
+
+
+def test_call_accepts_native_amount_string(account, chain) -> None:
+    account.call(to="0x" + "22" * 20, value="0.1 ether")
+
+    assert chain.w3.eth.call_calls == [
+        {
+            "from_": account.address,
+            "to": "0x" + "22" * 20,
+            "value": 100_000_000_000_000_000,
+            "chain_id": 1,
+        }
+    ]
+
+
+def test_estimate_gas_accepts_native_amount_string(account, chain) -> None:
+    account.estimate_gas(to="0x" + "22" * 20, value="1.5 gwei")
+
+    assert chain.w3.eth.estimate_gas_calls == [
+        {
+            "from_": account.address,
+            "to": "0x" + "22" * 20,
+            "value": 1_500_000_000,
+            "chain_id": 1,
+        }
+    ]
+
+
+def test_transact_accepts_native_amount_strings(monkeypatch, account, chain) -> None:
+    build_calls: list[dict[str, object]] = []
+
+    def fake_build_transaction_object(**kwargs):
+        build_calls.append(kwargs)
+        return {"tx": "object"}
+
+    class Signed:
+        raw_transaction = b"\xde\xad"
+
+    monkeypatch.setattr(
+        "fw3_objects.account.build_transaction_object", fake_build_transaction_object
+    )
+    monkeypatch.setattr(account, "sign_transaction", lambda tx: Signed())
+
+    account.transact(
+        to="0x" + "22" * 20,
+        value="0.01 ether",
+        gas_limit=21_000,
+        gas_price="13.37 gwei",
+        nonce=4,
+    )
+
+    assert build_calls == [
+        {
+            "from_": account.address,
+            "to": "0x" + "22" * 20,
+            "gas": 21_000,
+            "gas_price": 13_370_000_000,
+            "max_fee_per_gas": None,
+            "max_priority_fee_per_gas": None,
+            "value": 10_000_000_000_000_000,
+            "data": None,
+            "nonce": 4,
+            "chain_id": 1,
+        }
+    ]
+
+
+def test_transact_accepts_eip1559_fee_strings(monkeypatch, account, chain) -> None:
+    build_calls: list[dict[str, object]] = []
+
+    def fake_build_transaction_object(**kwargs):
+        build_calls.append(kwargs)
+        return {"tx": "object"}
+
+    class Signed:
+        raw_transaction = b"\xca\xfe"
+
+    monkeypatch.setattr(
+        "fw3_objects.account.build_transaction_object", fake_build_transaction_object
+    )
+    monkeypatch.setattr(account, "sign_transaction", lambda tx: Signed())
+    monkeypatch.setattr(account, "estimate_gas", lambda **kwargs: 21_000)
+
+    account.transact(
+        to="0x" + "22" * 20,
+        max_fee_per_gas="30 gwei",
+        max_priority_fee_per_gas="1.5 gwei",
+        nonce=4,
+    )
+
+    assert build_calls == [
+        {
+            "from_": account.address,
+            "to": "0x" + "22" * 20,
+            "gas": 21_000,
+            "gas_price": None,
+            "max_fee_per_gas": 30_000_000_000,
+            "max_priority_fee_per_gas": 1_500_000_000,
+            "value": None,
+            "data": None,
+            "nonce": 4,
+            "chain_id": 1,
+        }
+    ]
+
+
+def test_native_amount_strings_reject_wei_and_fractional_wei(account) -> None:
+    with pytest.raises(ValueError, match="Unsupported unit: wei"):
+        account.call(value="100 wei")
+
+    with pytest.raises(ValueError, match="whole wei"):
+        account.call(value="0.0000000001 gwei")
